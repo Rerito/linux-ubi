@@ -87,4 +87,24 @@ config MTD_UBI_GLUEBI
 	   work on top of UBI. Do not enable this unless you use legacy
 	   software.
 
+config MTD_UBI_CRYPTO
+	bool "UBI Cryptographic Support"
+	default n
+	help
+	   Enable AES-CTR encryption of UBI user volumes. The key for a volume
+	   must be set through an ioctl command.
+
+if MTD_UBI_CRYPTO
+config UBI_CRYPTO_HMAC
+	bool "UBI HMAC header for logical eraseblocks"
+	default n
+	help
+	   This option adds a new header to the beginning of each LEB.
+	   This header contains HMAC tags that authenticates the related LEB.
+	   This also provide the ability to check the validity of the key set up
+	   by the user.
+	   As a consequence, enabling this feature will also enable key checking
+	   routines.
+endif # MTD_UBI_CRYPTO
+
 endif # MTD_UBI
