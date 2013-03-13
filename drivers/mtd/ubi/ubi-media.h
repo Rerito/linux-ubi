@@ -283,7 +283,11 @@ struct ubi_vid_hdr {
 	__u8    compat;
 	__be32  vol_id;
 	__be32  lnum;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	__be32  hmac_hdr_offset;
+#else
 	__u8    padding1[4];
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	__be32  data_size;
 	__be32  used_ebs;
 	__be32  data_pad;
@@ -293,6 +297,54 @@ struct ubi_vid_hdr {
 	__u8    padding3[12];
 	__be32  hdr_crc;
 } __attribute__ ((packed));
+
+/**
+ * struct ubi_hmac_hdr - on-flash HMAC tags header for a LEB.
+ * @htag: the HMAC tag specific to the LEB
+ * @htag_crc: the checksum of @htag
+ * @top_hmac: the HMAC tag for the first half of the LEB
+ * @top_crc: the checksum of @top_hmac
+ * @btm_hmac: the HMAC tag for the second half of the LEB
+ * @btm_crc: the checksum of @btm_hmac
+ * @padding1: padding bytes for 64 bytes alignment
+ *
+ * The @htag value will always be computed when the HMAC is enabled.
+ * It is computed using various figures specific to the LEB at a given time.
+ * Assuming K is the private key for the volume, the @htag value will be :
+ *     HMAC(VID|LEB|sqnum|PEB, K)
+ * Where :
+ *  - VID is the ID of the volume to which belongs the LEB
+ *  - LEB is the LEB number
+ *  - sqnum is the sqnum assigned to the LEB VID header at the time
+ *  - PEB is the number of the PEB mapped to the LEB
+ *
+ * The CRC32 of @htag is then appendend to prevent data corruption.
+ *
+ * Then, the @top_hmac and @btm_hmac fields are computed in the pattern :
+ *     HMAC(VID|LEB|sqnum|PEB|HALF, K)
+ * Where :
+ *  - VID, LEB, sqnum, PEB are the same as for @htag
+ *  - HALF is the targeted half of the LEB :
+ *    if @top_hmac, then the first half of the LEB is used.
+ *    if @btm_hmac, then it is the second half.
+ * These fields are always computed for a static volume.
+ * In the case of a dynamic volume, @top_hmac will be computed when
+ * a write operation will affect bytes of the second half of the LEB.
+ * @btm_hmac will be appended when the last byte of the LEB will be written.
+ *
+ * When the top and bottom HMAC tags does not exist,
+ * the corresponding header fields are filled with 0xFF bytes.
+ */
+struct ubi_hmac_hdr {
+	__u8    htag[16];
+	__be32  htag_crc;
+	__u8    top_hmac[16];
+	__be32  top_crc;
+	__u8    btm_hmac[16];
+	__be32  btm_crc;
+	__u8    padding1[4];
+} __attribute__ ((packed));
+
 
 /* Internal UBI volumes count */
 #define UBI_INT_VOL_COUNT 1

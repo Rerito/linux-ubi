@@ -90,5 +90,11 @@ config MTD_UBI_DEBUG_MSG_IO
 	depends on MTD_UBI_DEBUG
 	help
 	  This option enables debugging messages from the UBI input/output unit.
+config MTD_UBI_DEBUG_MSG_CRYPTO
+	bool "Cryptographic sub-system messages"
+	default n
+	depends on MTD_UBI_DEBUG
+	help
+	   This option enables debuggin messages from the UBI Cryptographic subsystem.
 
 endmenu # UBI debugging messages
