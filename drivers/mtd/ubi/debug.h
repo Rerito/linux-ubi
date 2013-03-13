@@ -85,6 +85,13 @@ void ubi_dbg_dump_flash(struct ubi_device *ubi, int pnum, int offset, int len);
 #define dbg_io(fmt, ...) ({})
 #endif
 
+#ifdef CONFIG_MTD_UBI_DEBUG_MSG_CRYPTO
+/* Messages from the crypo sub-system */
+#define dbg_crypto(fmt, ...) dbg_msg(fmt, ##__VA_ARGS__)
+#else
+#define dbg_crypto(fmt, ...) ({})
+#endif
+
 #ifdef CONFIG_MTD_UBI_DEBUG_MSG_BLD
 /* Initialization and build messages */
 #define dbg_bld(fmt, ...) dbg_msg(fmt, ##__VA_ARGS__)
@@ -93,6 +100,7 @@ void ubi_dbg_dump_flash(struct ubi_device *ubi, int pnum, int offset, int len);
 #define dbg_bld(fmt, ...) ({})
 #define UBI_IO_DEBUG 0
 #endif
+
 
 #ifdef CONFIG_MTD_UBI_DEBUG_PARANOID
 int ubi_dbg_check_all_ff(struct ubi_device *ubi, int pnum, int offset, int len);
