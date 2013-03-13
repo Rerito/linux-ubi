@@ -33,4 +33,6 @@ int ubi_kval_is_in_tree(struct ubi_kval_tree *tree, u32 x);
 
 int ubi_kval_insert(struct ubi_kval_tree *tree, u32 x, u32 y);
 
+int ubi_kval_insert(struct ubi_kval_tree *tree, u32 x, u32 y);
+
 

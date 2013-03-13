@@ -108,6 +108,7 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 	}
 	while (!list_empty(lookup_list)) {
 		/* Pop the head of @lookup_list */
+
 		entry = list_entry(lookup_list.next,
 				struct ubi_kval_lookup_entry, entry);
 		list_del(&entry->entry);
@@ -127,7 +128,6 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 				 */
 				kfree(entry);
 				goto exit;
-
 			} else {
 				/*
 				 * We must trigger the current node for deletion.
@@ -188,6 +188,7 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 	}
 	return err;
 }
+
 
 /**
  * ubi_kval_insert - Insert an interval into the tree
@@ -353,5 +354,4 @@ void ubi_kval_clear_tree(struct ubi_kval_tree *tree)
 		kfree(del);
 	}
 	up_write(&tree->sem);
-
 }
