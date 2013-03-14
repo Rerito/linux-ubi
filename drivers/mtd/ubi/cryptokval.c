@@ -27,7 +27,20 @@ ubi_kval_alloc_lu_entry(struct ubi_kval_node *node)
 }
 
 static int ubi_kval_insert_no_ovlap(struct ubi_kval_tree *tree, u32 d, u32 u);
+static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u);
 
+/**
+ * ubi_kval_insert_no_ovlap - Insert an interval
+ * @tree: The target tree
+ * @d: interval's lower bound
+ * @u: interval's upper bound
+ *
+ * This function assumes that the requested interval
+ * does not overflow with any of the intervals already
+ * stored in the tree.
+ * Thus, it simply locates the insertion position, and
+ * inserts the requested interval into the tree.
+ */
 static int ubi_kval_insert_no_ovlap(struct ubi_kval_tree *tree, u32 d, u32 u)
 {
 	struct ubi_kval_node *node, *i;
@@ -54,7 +67,27 @@ static int ubi_kval_insert_no_ovlap(struct ubi_kval_tree *tree, u32 d, u32 u)
 	return 0;
 }
 
-int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
+
+/**
+ * ubi_kval_insert_unlocked - Insert an interval into a tree
+ * @tree: the target tree
+ * @d: the interval's lower bound
+ * @u: the interval's upper bound
+ *
+ * This function scans the tree to find overlapping intervals.
+ * When hitting an overlap, @d and @u are updated appropriately.
+ * Obsolete nodes are marked as to be deleted. At the end of this
+ * look up stage, the function deletes all the conflicting intervals
+ * from the tree and then insert the updated requested interval using
+ * @ubi_kval_insert_no_ovlap.
+ *
+ * This function does not acquire the semaphore of @tree,
+ * therefore, the caller must ensure the call is surrounded
+ * by appropriate locking.
+ *
+ * It also assumes @tree is a valid pointer.
+ */
+static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 {
 	int err = 0;
 	struct ubi_kval_lookup_entry *entry, *tmp;
@@ -76,7 +109,8 @@ int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 	}
 	while (!list_empty(lookup_list)) {
 		/* Pop the head of @lookup_list */
-		entry = lookup_list.next;
+		entry = list_entry(lookup_list.next,
+				struct ubi_kval_lookup_entry, entry);
 		list_del(&entry->entry);
 
 		if ((u + 1 >= node->d) &&
@@ -93,7 +127,7 @@ int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 				 * We have nothing to do ...
 				 */
 				kfree(entry);
-				break;
+				goto exit;
 
 			} else {
 				/*
@@ -156,6 +190,21 @@ int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 	return err;
 }
 
+/**
+ * ubi_kval_insert - Insert an interval into the tree
+ * @tree: the target tree
+ * @d: interval's lower bound
+ * @u: interval's upper bound
+ *
+ * Locks the tree and checks its sanity before
+ * calling @ubi_kval_insert_unlocked to perform
+ * the insertion.
+ *
+ * Possible errors:
+ * %EINVAL : @tree is not a valid pointer or d > u
+ * %EACCES : @tree is marked as @dying and thus
+ *           no node should be inserted into it.
+ */
 int ubi_kval_insert(struct ubi_kval_tree *tree, u32 d, u32 u)
 {
 	int err = 0;
@@ -163,6 +212,10 @@ int ubi_kval_insert(struct ubi_kval_tree *tree, u32 d, u32 u)
 		return -EINVAL;
 	}
 	down_write(&tree->sem);
+	if (tree->dying) {
+		up_write(&tree->sem);
+		return -EACCES;
+	}
 	err = ubi_kval_insert_unlocked(tree, d, u);
 	up_write(&tree->sem);
 	return err;
@@ -253,9 +306,11 @@ int ubi_kval_is_in_tree(struct ubi_kval_tree *tree, u32 x)
 {
 	struct ubi_kval_node *node;
 	struct rb_node *p;
+	int ret = 0;
 	if (BAD_PTR(tree)) {
 		return -EINVAL;
 	}
+	down_read(&tree->sem);
 	p = tree->root.rb_node;
 	while (NULL != p) {
 		node = rb_entry(p, struct ubi_kval_node, node);
@@ -264,10 +319,13 @@ int ubi_kval_is_in_tree(struct ubi_kval_tree *tree, u32 x)
 		} else if (node->u < x) {
 			p = p->rb_right;
 		}
-		else
-			return 1;
+		else {
+			ret = 1;
+			break;
+		}
 	}
-	return 0;
+	up_read(&tree->sem);
+	return ret;
 }
 
 int ubi_kval_init_tree(struct ubi_kval_tree *tree)
@@ -275,8 +333,26 @@ int ubi_kval_init_tree(struct ubi_kval_tree *tree)
 	if (BAD_PTR(tree)) {
 		return -EINVAL;
 	}
-	tree->dying = 0;
 	tree->root = RB_ROOT;
+	tree->dying = 0;
 	init_rwsem(&tree->sem);
 	return 0;
+}
+
+void ubi_kval_clear_tree(struct ubi_kval_tree *tree)
+{
+	struct rb_node *n;
+	struct ubi_kval_node *del;
+	if (BAD_PTR(tree)) {
+		return;
+	}
+	down_write(&tree->sem);
+	tree->dying = 1;
+	while (NULL != (n = tree->root.rb_node)) {
+		rb_erase(n, &tree->root);
+		del = rb_entry(n, struct ubi_kval_node, node);
+		kfree(del);
+	}
+	up_write(&tree->sem);
+
 }
