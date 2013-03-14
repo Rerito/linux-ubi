@@ -87,6 +87,13 @@ struct ubi_key {
  * @upd: update marker
  * @bad: bad key marker
  * @mutex: a mutex to protect the node
+ * @tagged: are the volume LEBs HMAC tagged ?
+ * @key_ring: list of the volume keys
+ * @main: main key for the volume
+ * @kr_sem: r/w semaphore to protect access to @key_ring
+ * @unknown: the interval tree of unresolved LEB's
+ * @upd_worker: the worker that performs main key updates
+ * @cur: key in use for the volume
  */
 struct ubi_key_entry {
 	struct rb_node node;
@@ -99,6 +106,7 @@ struct ubi_key_entry {
 	struct list_head key_ring;
 	struct ubi_key *main;
 	struct rw_semaphore kr_sem;
+	struct ubi_kval_tree unknown;
 	struct work_struct upd_worker;
 #else
 	struct ubi_key cur;
@@ -141,4 +149,4 @@ void ubi_kmgr_put_tree(struct ubi_key_tree *tree);
 void ubi_kmgr_init(void);
 void ubi_kmgr_term(void);
 
-#endif
+#endif // _CRYPTO_KEY_MGR_H_
