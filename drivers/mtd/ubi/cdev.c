@@ -352,7 +352,7 @@ static ssize_t vol_cdev_direct_write(struct file *file, const char __user *buf,
 		*offp += len;
 		buf += len;
 		len = count > tbuf_size ? tbuf_size : count;
-	}			printk("in_use++ :D \n");
+	}
 
 	vfree(tbuf);
 	return err ? err : count_save - count;
