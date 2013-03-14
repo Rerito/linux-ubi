@@ -150,16 +150,24 @@ static struct ubi_key_entry *ubi_kmgr_alloc_kentry(__be32 vid,
 #else
 	key = &kentry->cur;
 #endif // CONFIG_UBI_CRYPTO_HMAC
-
-
-	memcpy(key->key, k, key_len);
+	if (key_len && !BAD_PTR(k)) {
+		if (NULL == (key->key = kzalloc(key_len, GFP_KERNEL))) {
+			err = -ENOMEM;
+			goto exit;
+		}
+		memcpy(key->key, k, key_len);
+		key->key_len = key_len;
+	} else {
+		key->key = (IS_ERR(k)) ? k : NULL;
+		key->key_len = 0;
+	}
 	mutex_init(&kentry->mutex);
 
 	exit:
 	if (err) {
 		if (kentry) {
 			if (!BAD_PTR(key)) {
-				if (key->key)
+				if (!BAD_PTR(key->key))
 					kfree(key->key);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 				kfree(key);

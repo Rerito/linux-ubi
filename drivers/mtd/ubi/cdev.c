@@ -348,7 +348,7 @@ static ssize_t vol_cdev_direct_write(struct file *file, const char __user *buf,
 		*offp += len;
 		buf += len;
 		len = count > tbuf_size ? tbuf_size : count;
-	}
+	}			printk("in_use++ :D \n");
 
 	vfree(tbuf);
 	return err ? err : count_save - count;
@@ -600,7 +600,6 @@ static long vol_cdev_ioctl(struct file *file, unsigned int cmd,
 			err = -EFAULT;
 			break;
 		}
-		printk("Received IOCSETVOLKEY ioctl.\n");
 		tree = ubi_kmgr_get_tree(vol->ubi->ubi_num);
 		vid = cpu_to_be32(vol->vol_id);
 		if (!req.rm) {
