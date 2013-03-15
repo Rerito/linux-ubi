@@ -412,6 +412,8 @@ struct ubi_set_prop_req {
        __u64 value;
 }  __attribute__ ((packed));
 
+#define UBI_AES_KEY_SIZE 16
+
 /**
  * struct ubi_set_vol_key_req - a data structure used to set a UBI volume key
  * @k: The actual key

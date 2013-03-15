@@ -39,7 +39,9 @@
 	printk(KERN_ALERT "%s - Exit :\n" fmt,__func__, ##__VA_ARGS__);\
 	} while (0)
 
-
+#ifndef dbg_crypto
+#define dbg_crypto(...) ({})
+#endif
 
 
 static inline __u8 *ubi_crypto_compute_iv(__be64 sqnum, int offset, int klen);

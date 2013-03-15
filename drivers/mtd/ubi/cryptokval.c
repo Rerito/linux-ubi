@@ -44,9 +44,9 @@ static int ubi_kval_insert_no_ovlap(struct ubi_kval_tree *tree, u32 d, u32 u)
 {
 	struct ubi_kval_node *node, *i;
 	struct rb_node **p, *parent;
-	*p = tree->root.rb_node;
+	p = &tree->root.rb_node;
 	parent = *p;
-	if (NULL == (kmalloc(sizeof(*node), GFP_KERNEL))) {
+	if (NULL == (node = kmalloc(sizeof(*node), GFP_KERNEL))) {
 		return -ENOMEM;
 	}
 	node->d = d;
@@ -106,7 +106,7 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 		}
 		list_add(&entry->entry, &lookup_list);
 	}
-	while (!list_empty(lookup_list)) {
+	while (!list_empty(&lookup_list)) {
 		/* Pop the head of @lookup_list */
 
 		entry = list_entry(lookup_list.next,
