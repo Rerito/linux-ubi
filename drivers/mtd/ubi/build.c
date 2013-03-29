@@ -710,6 +710,10 @@ static int io_init(struct ubi_device *ubi, int max_beb_per1024)
 	/* Calculate default aligned sizes of EC and VID headers */
 	ubi->ec_hdr_alsize = ALIGN(UBI_EC_HDR_SIZE, ubi->hdrs_min_io_size);
 	ubi->vid_hdr_alsize = ALIGN(UBI_VID_HDR_SIZE, ubi->hdrs_min_io_size);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	ubi->hmac_hdr_alsize = ALIGN(UBI_HMAC_HDR_SIZE,
+			ubi->hdrs_min_io_size);
+#endif
 
 	dbg_gen("min_io_size      %d", ubi->min_io_size);
 	dbg_gen("max_write_size   %d", ubi->max_write_size);
@@ -728,7 +732,18 @@ static int io_init(struct ubi_device *ubi, int max_beb_per1024)
 						ubi->vid_hdr_aloffset;
 	}
 
-	/* Similar for the data offset */
+	/* Similar for the data offset
+	 * and the potential HMAC hdr offset */
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	ubi->hmac_hdr_offset = ubi->vid_hdr_offset + UBI_VID_HDR_SIZE;
+	ubi->hmac_hdr_aloffset = ubi->vid_hdr_aloffset
+			+ ubi->vid_hdr_alsize;
+	ubi->hmac_hdr_shift = ubi->hmac_hdr_offset -
+					ubi->hmac_hdr_aloffset;
+	ubi->hmac_leb_start = ubi->hmac_hdr_offset + UBI_HMAC_HDR_SIZE;
+	ubi->hmac_leb_start = ALIGN(ubi->leb_start, ubi->min_io_size);
+	ubi->hmac_leb_size = ubi->peb_size - ubi->hmac_leb_size;
+#endif
 	ubi->leb_start = ubi->vid_hdr_offset + UBI_VID_HDR_SIZE;
 	ubi->leb_start = ALIGN(ubi->leb_start, ubi->min_io_size);
 

@@ -347,7 +347,7 @@ struct ubi_key *ubi_kmgr_get_mainkey(struct ubi_key_entry *kentry)
 {
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	struct ubi_key *k = NULL;
-#endif
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	if (BAD_PTR(kentry)) {
 		return ERR_PTR(-EINVAL);
 	}
@@ -360,8 +360,9 @@ struct ubi_key *ubi_kmgr_get_mainkey(struct ubi_key_entry *kentry)
 	return kentry->main;
 #else
 	return &kentry->cur;
-#endif
+#endif // CONFIG_UBI_CRYPTO_HMAC
 }
+
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 
@@ -403,7 +404,7 @@ static inline struct ubi_key *ubi_kmgr_put_key(struct ub_key *k)
 struct ubi_key *ubi_kmgr_get_nextkey(struct ubi_key_entry *kentry,
 		struct ubi_key *key)
 {
-	struct ubi_key *k = ERR_PTR(-ENODATA);
+	struct ubi_key *k = key;
 	if (BAD_PTR(key) || BAD_PTR(kentry)) {
 		return ERR_PTR(-EINVAL);
 	}
@@ -411,12 +412,11 @@ struct ubi_key *ubi_kmgr_get_nextkey(struct ubi_key_entry *kentry,
 	down_read(&kentry->kr_sem);
 	if (!list_empty(&kentry->key_ring)) {
 		while (container_of(&kentry->key_ring, struct ubi_key, entry) ==
-				(k = container_of(key->entry.next, struct ubi_key, entry))) {
+				(k = container_of(k->entry.next, struct ubi_key, entry))) {
 		}
-		if (k != kentry->main && k != key) {
+		if (k != key) {
 			ubi_kmgr_get_key(k);
 		} else {
-			ubi_kmgr_put_key(key);
 			k = ERR_PTR(-ENODATA);
 		}
 	}
@@ -436,24 +436,26 @@ struct ubi_key *ubi_kmgr_get_nextkey(struct ubi_key_entry *kentry,
  * This function returns the first key in the key ring that matches
  * the given private data according the given look up function.
  * If no key match is found, the function returns %ENODATA
+ *
+ * It may also returns %EINVAL if @kentry is not a valid pointer
  */
 struct ubi_key *ubi_kmgr_key_lookup(struct ubi_key_entry *kentry,
 		ubi_kmgr_key_lu_func lookup, void *private)
 {
 	struct ubi_key *k = NULL;
 	int i, ok = 0;
-	k = ubi_kmgr_get_mainkey(kentry);
-	while (!BAD_PTR(k)) {
-		mutex_lock(&k->mutex);
-		ok = lookup(k, private);
-		mutex_unlock(&k->mutex);
-		if (ok) {
-			break;
-		} else {
-			k = ubi_kmgr_get_nextkey(kentry, k);
+	if (BAD_PTR(kentry)) {
+		return ERR_PTR(-EINVAL);
+	}
+	down_read(&kentry->kr_sem);
+	list_for_each_entry(k, &kentry->key_ring, entry) {
+		if (lookup(k, private)) {
+			up_read(&kentry->kr_sem);
+			return k;
 		}
 	}
-	return k;
+	up_read(&kentry->kr_sem);
+	return ERR_PTR(-ENODATA);
 }
 
 static int ubi_kmgr_value_lookup(struct ubi_key *k, void *private)
@@ -592,12 +594,79 @@ static int ubi_kmgr_remove_kentry(struct ubi_key_tree *tree,
 	return ubi_kmgr_free_kentry(kentry);
 }
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
+		struct ubi_vid_hdr *vid_hdr, struct ubi_key_entry *kentry)
+{
+	struct ubi_key *key = NULL;
+	u32 lnum = be32_to_cpu(vid_hdr->lnum);
+	__u8 hmac_tag[16];
+	list_for_each_entry(key, &kentry->key_ring, entry) {
+		compute_hmac_tag(&hmac_tag);
+		if (!strcmp(hmac_tag, hmac_hdr->htag, 16)) {
+			ubi_kmgr_get_key(key);
+			ubi_kval_insert(&key->val_tree, lnum, lnum);
+			ubi_kval_remove(&kentry->unknown, lnum, lnum);
+			return key;
+		}
+	}
+	return ERR_PTR(-ENODATA);
+}
+
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
+struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
+		struct ubi_vid_hdr *vid_hdr, struct ubi_key_entry *kentry)
+{
+	u32 lnum;
+	struct ubi_key *key = NULL;
+	if (BAD_PTR(kentry) || BAD_PTR(vid_hdr)) {
+		return ERR_PTR(-EINVAL);
+	}
+	lnum = be32_to_cpu(vid_hdr->lnum);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	down_read(&kentry->kr_sem);
+	list_for_each_entry(key, &kentry->key_ring, entry) {
+		if (ubi_kval_is_in_tree(&key->val_tree, lnum)) {
+			up_read(&kentry->kr_sem);
+			return key;
+		}
+	}
+
+	if (!ubi_kval_is_in_tree(&kentry->unknown, lnum) ||
+			kentry->upd) {
+		if (kentry->upd) {
+			ubi_kmgr_ack_update(kentry);
+			ubi_kval_clear_tree(&kentry->unknown);
+//			ubi_kval_set_sane(&kentry->unknown, 1);
+			kentry->unknown.dying = 0;
+		}
+		key = ubi_kmgr_probe_leb_key(hmac_hdr, vid_hdr, kentry);
+		if (BAD_PTR(key)) {
+			ubi_kval_insert(&kentry->unknown, lnum, lnum);
+		}
+	} else {
+		key = ERR_PTR(-ENODATA);
+	}
+	up_read(&kentry->kr_sem);
+#else
+	key = &kentry->cur;
+#endif // CONFIG_UBI_CRYPTO_HMAC
+	return key;
+}
+
 /**
  * ubi_kmgr_vol_setkey - (Un)set the key for a given UBI volume
  * @tree: The key tree that will hold the key
  * @vol_id: The volume ID
  * @k: A pointer to the key value
  * @len: The length of the key
+ * @main: Set to %0 if auxiliary key
+ *        (used only if %CONFIG_UBI_CRYPTO_HMAC)
+ * @vol: A pointer to the volume descriptor of
+ *        the UBI device. Used by the update worker
+ *        to recover the UBI data structures.
+ *        (only with %CONFIG_UBI_CRYPTO_HMAC enabled)
  *
  * This function will set up the key according to the parameters.
  * If no kentry is found for @vol_id in @tree, then a new one is allocated
@@ -638,7 +707,7 @@ static int ubi_kmgr_remove_kentry(struct ubi_key_tree *tree,
  */
 int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
 		__be32 vol_id, __u8 *k, unsigned int len,
-		__u8 main)
+		__u8 main, void *vol)
 {
 	struct ubi_key_entry *kentry = NULL;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
@@ -658,6 +727,9 @@ int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
 		if (IS_ERR(kentry)) {
 			return PTR_ERR(kentry);
 		}
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		kentry->vol = vol;
+#endif
 		down_write(&tree->sem);
 		err = ubi_kmgr_insert_kentry(tree, kentry);
 		if (err) {
@@ -678,6 +750,11 @@ int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
 		 * When the main key is changed, the update worker must
 		 * be reset and start again from the beginning of the volume.
 		 */
+		if (vol != kentry->vol) {
+			/*
+			 * Error : Not valid volume descriptor.
+			 */
+		}
 		key = ubi_kmgr_key_lu_by_value(kentry, k, len);
 		if (BAD_PTR(key)) {
 			/* We must allocate a new key */
@@ -739,21 +816,19 @@ int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
 }
 
 /**
- * ubi_kmgr_setkey_done - Signal that a key update is over
+ * ubi_kmgr_ack_update - Acknowledge a key ring update
  * @kentry: The updated kentry
  *
- * When an existing key is replaced, UBI layer will need to have access
- * to both the old and the new keys.
- * Thus, the cryptokmgr marks its @upd field.
- * When the update is done however, the old key must be freed
- * and the marker is deleted. This way the user can set up a new key again.
+ * When a new key is added to the key ring, the @upd field
+ * of the kentry takes a non-zero value. Then, when looking
+ * for a specific LEB key,
  *
  * @warning This function must be called with @kentry acquired using
  * @ubi_kmgr_get_kentry
  * Otherwise, race conditions may occur between this function and
  * @ubi_kmgr_remove_kentry that may lead to an Oops.
  */
-void ubi_kmgr_setkey_done(struct ubi_key_entry *kentry)
+void ubi_kmgr_ack_update(struct ubi_key_entry *kentry)
 {
 	if (likely(!BAD_PTR(kentry))) {
 		mutex_lock(&kentry->mutex);
@@ -761,15 +836,6 @@ void ubi_kmgr_setkey_done(struct ubi_key_entry *kentry)
 		mutex_unlock(&kentry->mutex);
 	}
 }
-
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-
-/*
- * TODO
- * Implementation of the update worker
- */
-
-#endif
 
 /**
  * ubi_kmgr_init_tree - initialize the given key tree
@@ -812,6 +878,15 @@ static void ubi_kmgr_clear_tree(struct ubi_key_tree *tree)
 	up_read(&tree->sem);
 }
 
+/**
+ * ubi_kmgr_get_tree - Get a ubi device key tree
+ * @ubi_dev: the number of the targetted UBI device
+ *
+ * This function simply returns a reference to the
+ * appropriate key tree for the given device.
+ * The result should be put using @ubi_kmgr_put_tree
+ * when it is not used any more by the caller.
+ */
 struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev)
 {
 	if (0 > ubi_dev || UBI_MAX_DEVICES < ubi_dev) {
@@ -820,6 +895,16 @@ struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev)
 	return &ubi_kmgr_ktree[ubi_dev];
 }
 
+/**
+ * ubi_kmgr_put_tree - Put back a ubi key tree
+ * @tree: the tree to put back
+ *
+ * This function releases a reference to the
+ * given tree. This function is useless at the time
+ * but in the future, someone might turn key tree
+ * management from its current static implementation
+ * to a dynamic one and it will then be needed.
+ */
 void ubi_kmgr_put_tree(struct ubi_key_tree *tree)
 {
 	/*

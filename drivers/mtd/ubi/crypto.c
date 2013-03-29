@@ -275,13 +275,20 @@ static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
  * Thus, the volume ID is related to a particular UBI device, hence this dependency.
  * Then, @vhdr contains information used for the ciphering settings (the sqnum)
  */
+#ifndef CONFIG_UBI_CRYPTO_HMAC
 int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 		void *src, void *dst, size_t len, int offset)
+#else
+int ubi_crypto_cipher(int ubi_dev,
+		struct ubi_vid_hdr *vhdr, struct ubi_hmac_hdr *hmac_hdr,
+		void *src, void *dst, size_t len, int offset)
+#endif
 {
 	int err = 0;
 	struct ubi_key_entry *k = NULL;
 	struct ubi_key *key = NULL;
 	struct ubi_key_tree *tree = NULL;
+	struct ubi_hmac_hdr *hmac_hdr = NULL;
 	__u8 *iv = NULL;
 
 	TRACE_ENTER("len : %u | vol_id : %u | LEB : %u off : %d | sqnum : %llu\n",
@@ -308,9 +315,9 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 	k = ubi_kmgr_get_kentry(tree, vhdr->vol_id);
 	/*
 	 * FIXME : When HMAC support will be deployed,
-	 * We must add an additional parameter to this function to state
-	 * if we want to use "old" or "cur" key value.
+	 * We must determine which key has to be used.
 	 */
+#ifndef UBI_CRYPTO_HMAC
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
 		printk("%s - No kentry, omitting ciphering.\n", __func__ );
 		if (dst != src) {
@@ -320,8 +327,14 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 		err = 0;
 		goto exit;
 	}
-#ifndef CONFIG_UBI_CRYPTO_HMAC
 	key = &k->cur;
+#else
+	key = ubi_kmgr_get_leb_key(hmac_hdr, vhdr, k);
+	if (BAD_PTR(key)) {
+		printk("Cannot proceed ! We do not own the key");
+		err = -EACCES;
+		goto exit;
+	}
 #endif
 	/*
 	 * TODO : Add HMAC checkings
@@ -372,6 +385,7 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
  * ubi_crypto_decipher - Decipher the given data
  * @ubi_dev: The targeted UBI device
  * @vhdr: A pointer to the VID header of the targeted LEB
+ * @hmac_hdr: A pointer to the HMAC header of the LEB
  * @src: The source pointer, i.e. the ciphertext
  * @dst: The destination pointer, i.e. the place to store the plaintext
  * @len: The length of the data in @src
@@ -381,11 +395,20 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
  * is symmetric. It is declared to make the code clearer.
  * Please, use this function when you intend to decipher data.
  */
+#ifndef CONFIG_UBI_CRYPTO_HMAC
 inline int ubi_crypto_decipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 		void *src, void *dst, size_t len, int offset)
 {
 	return ubi_crypto_cipher(ubi_dev, vhdr, src, dst, len, offset);
 }
+#else
+inline int ubi_crypto_decipher(int ubi_dev,
+		struct ubi_vid_hdr *vhdr, struct ubi_hmac_hdr *hmac_hdr,
+		void *src, void *dst, size_t len, int offset)
+{
+	return ubi_crypto_cipher(ubi_dev, vhdr, hmac_hdr, src, dst, len, offset);
+}
+#endif
 
 /**
  * ubi_crypto_init - Initialize the UBI cryptographic engine

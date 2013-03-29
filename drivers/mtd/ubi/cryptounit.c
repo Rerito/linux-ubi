@@ -60,7 +60,7 @@ struct ubi_crypto_unit *ubi_cru_alloc_unit(void)
 	}
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-	p->hmac.tfm = (struct crypto_tfm*)crypto_alloc_aead("hmac(aes)", 0, 0);
+	p->hmac.tfm = (struct crypto_tfm*)crypto_alloc_shash("hmac(sha1)", 0, 0);
 	if (IS_ERR(p->hmac.tfm)) {
 		crypto_free_blkcipher((struct crypto_blkcipher*)p->aes.tfm);
 		err = PTR_ERR(p->hmac.tfm);

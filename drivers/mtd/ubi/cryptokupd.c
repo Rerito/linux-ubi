@@ -44,6 +44,8 @@ void ubi_kmgr_upd(void *p_kentry)
 	struct ubi_upd_work upd_data;
 	struct ubi_vid_hdr vid_hdr;
 	struct ubi_hmac_hdr hmac_hdr;
+	struct ubi_volume *vol;
+	struct ubi_device *ubi;
 	u32 leb = 0, max = 0;
 	u32 reserved_ebs;
 	int err = 0;
@@ -113,7 +115,13 @@ void ubi_kmgr_upd(void *p_kentry)
 			 *    use the main key instead of the previous one.
 			 * 4. If an error has occured ...
 			 */
-
+			vol = kentry->vol;
+			if (BAD_PTR(vol)) {
+				/* We should stop the update worker */
+			} else {
+				ubi = vol->ubi;
+				err = ubi_eba_update_leb(ubi, vol, leb);
+			}
 			/*
 			 * FIXME
 			 * The clean up is a little tricky if it is a copy failure

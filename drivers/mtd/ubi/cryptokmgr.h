@@ -13,7 +13,6 @@
 #include "cryptokval.h"
 #endif
 
-
 /**
  * struct ubi_key_tree - A UBI device's key tree
  * @root: The root of the key tree
@@ -100,11 +99,14 @@ struct ubi_key_entry {
 	struct mutex mutex;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	__u8 tagged;
+	void *vol;
 	struct list_head key_ring;
 	struct ubi_key *main;
 	struct rw_semaphore kr_sem;
 	struct ubi_kval_tree unknown;
+	__u32 reserved_ebs;
 	struct work_struct upd_worker;
+	__u8 reset_upd;
 #else
 	struct ubi_key cur;
 #endif // CONFIG_UBI_CRYPTO_HMAC
@@ -136,8 +138,8 @@ void ubi_kmgr_put_kentry(struct ubi_key_entry *kentry);
 
 int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
 		__be32 vol_id, __u8 *k, unsigned int len,
-		__u8 main);
-void ubi_kmgr_setkey_done(struct ubi_key_entry *kentry);
+		__u8 main, void *vol);
+void ubi_kmgr_ack_update(struct ubi_key_entry *kentry);
 
 struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev);
 void ubi_kmgr_put_tree(struct ubi_key_tree *tree);
