@@ -94,6 +94,9 @@ static int self_check_ai(struct ubi_device *ubi, struct ubi_attach_info *ai);
 /* Temporary variables used during scanning */
 static struct ubi_ec_hdr *ech;
 static struct ubi_vid_hdr *vidh;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+static struct ubi_hmac_hdr *hmach;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 /**
  * add_to_list - add physical eraseblock to a list.
@@ -1047,6 +1050,13 @@ static int scan_peb(struct ubi_device *ubi, struct ubi_attach_info *ai,
 		}
 	}
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if(vidh->hmac_hdr_offset) {
+		/* The volume contains HMAC header */
+		ubi_
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 	if (ec_err)
 		ubi_warn("valid VID header but corrupted EC header at PEB %d",
 			 pnum);
@@ -1256,13 +1266,23 @@ static int scan_all(struct ubi_device *ubi, struct ubi_attach_info *ai,
 	if (!vidh)
 		goto out_ech;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	hmach = ubi_zalloc_hmac_hdr(ubi, GFP_KERNEL);
+	if (!hmach)
+		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 	for (pnum = start; pnum < ubi->peb_count; pnum++) {
 		cond_resched();
 
 		dbg_gen("process PEB %d", pnum);
 		err = scan_peb(ubi, ai, pnum, NULL, NULL);
 		if (err < 0)
-			goto out_vidh;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		goto out_hmach;
+#else
+		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	}
 
 	ubi_msg("scanning is finished");
@@ -1273,7 +1293,11 @@ static int scan_all(struct ubi_device *ubi, struct ubi_attach_info *ai,
 
 	err = late_analysis(ubi, ai);
 	if (err)
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		goto out_hmach;
+#else
 		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 	/*
 	 * In case of unknown erase counter we use the mean erase counter
@@ -1300,13 +1324,21 @@ static int scan_all(struct ubi_device *ubi, struct ubi_attach_info *ai,
 
 	err = self_check_ai(ubi, ai);
 	if (err)
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		goto out_hmach;
+#else
 		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 	ubi_free_vid_hdr(ubi, vidh);
 	kfree(ech);
 
 	return 0;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+out_hmach:
+	ubi_free_hmac_hdr(ubi, hmach);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 out_vidh:
 	ubi_free_vid_hdr(ubi, vidh);
 out_ech:

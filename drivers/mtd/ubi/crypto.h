@@ -10,6 +10,31 @@
 
 struct ubi_vid_hdr;
 
+/**
+ * struct ubi_crypto_cipher_info - Ciphering information
+ * @pnum: The target PEB number
+ * @offset: The offset in the LEB
+ * @ubi_dev: The number of the ubi device
+ * @len: The length of the data
+ * @src: Text to be processed
+ * @dst: Output for the (de)ciphered data
+ * @vhdr: VID header of the target LEB
+ * @hmac_hdr: HMAC header of the target LEB
+ *
+ * This structure gathers all the required information
+ * to perform an encryption/decryption operation.
+ */
+struct ubi_crypto_cipher_info {
+	int pnum, offset, ubi_dev;
+	size_t len;
+	void *src, *dst;
+	struct ubi_vid_hdr *vid_hdr;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	struct ubi_hmac_hdr *hmac_hdr;
+#endif
+
+};
+
 #define UBI_CRYPTO_CHUNK_SIZE 8
 
 #ifndef BAD_PTR
@@ -26,23 +51,8 @@ struct ubi_vid_hdr;
 		}\
 	}while(0)
 
-#ifndef CONFIG_UBI_CRYPTO_HMAC
-int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
-		void *src, void *dst, size_t len, int offset);
-#else
-int ubi_crypto_cipher(int ubi_dev,
-		struct ubi_vid_hdr *vhdr, struct ubi_hmac_hdr *hmac_hdr,
-		void *src, void *dst, size_t len, int offset);
-#endif
-
-#ifndef CONFIG_UBI_CRYPTO_HMAC
-inline int ubi_crypto_decipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
-		void *src, void *dst, size_t len, int offset);
-#else
-int ubi_crypto_decipher(int ubi_dev,
-		struct ubi_vid_hdr *vhdr, struct ubi_hmac_hdr *hmac_hdr,
-		void *src, void *dst, size_t len, int offset);
-#endif
+int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info);
+inline int ubi_crypto_decipher(struct ubi_crypto_cipher_info *info);
 
 void ubi_crypto_init(void);
 void ubi_crypto_term(void);

@@ -1039,8 +1039,7 @@ int ubi_io_read_vid_hdr(struct ubi_device *ubi, int pnum,
 	p = (char *)vid_hdr - ubi->vid_hdr_shift;
 	read_err = ubi_io_read(ubi, p, pnum, ubi->vid_hdr_aloffset,
 			  ubi->vid_hdr_alsize);
-	if (read_err && read_err != UBI_IO_BITFLIPS && !mtd_isint validate_hmac_hdr(const struct ubi_device *ubi,
-			 const struct ubi_hmac_hdr *hmac_hdr)_eccerr(read_err))
+	if (read_err && read_err != UBI_IO_BITFLIPS && !mtd_is_eccerr(read_err))
 		return read_err;
 
 	magic = be32_to_cpu(vid_hdr->magic);
