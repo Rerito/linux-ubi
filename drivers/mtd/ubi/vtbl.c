@@ -210,13 +210,7 @@ static int vtbl_check(const struct ubi_device *ubi,
 			err = 3;
 			goto bad;
 		}
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-		n = (vtbl->hmac) ? ubi->hmac_leb_size
-				         : ubi->leb_size;
-		if (alignment > n || alignment == 0) {
-#else
 		if (alignment > ubi->leb_size || alignment == 0) {
-#endif // CONFIG_UBI_CRYPTO_HMAC
 			err = 4;
 			goto bad;
 		}
@@ -226,14 +220,7 @@ static int vtbl_check(const struct ubi_device *ubi,
 			err = 5;
 			goto bad;
 		}
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-		if (vtbl->hmac)
-			n = ubi->hmac_leb_size % alignment;
-		else
-			n = ubi->leb_size % alignment;
-#else
 		n = ubi->leb_size % alignment;
-#endif // CONFIG_UBI_CRYPTO_HMAC
 		if (data_pad != n) {
 			ubi_err("bad data_pad, has to be %d", n);
 			err = 6;
@@ -565,15 +552,7 @@ static int init_volumes(struct ubi_device *ubi,
 		vol->vol_type = vtbl[i].vol_type == UBI_VID_DYNAMIC ?
 					UBI_DYNAMIC_VOLUME : UBI_STATIC_VOLUME;
 		vol->name_len = be16_to_cpu(vtbl[i].name_len);
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-		if (vtbl[i].hmac)
-			vol->usable_leb_size = ubi->hmac_leb_size -
-								   vol->data_pad;
-		else
-			vol->usable_leb_size = ubi->leb_size - vol->data_pad;
-#else
 		vol->usable_leb_size = ubi->leb_size - vol->data_pad;
-#endif // CONFIG_UBI_CRYPTO_HMAC
 		memcpy(vol->name, vtbl[i].name, vol->name_len);
 		vol->name[vol->name_len] = '\0';
 		vol->vol_id = i;

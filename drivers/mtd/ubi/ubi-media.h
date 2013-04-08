@@ -46,10 +46,6 @@
 /* Volume identifier header magic number (ASCII "UBI!") */
 #define UBI_VID_HDR_MAGIC 0x55424921
 
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-/* HMAC header magic number (ASCII "UBIC") */
-#define UBI_HMAC_HDR_MAGIC 0x55424943
-#endif
 
 /*
  * Volume type constants used in the volume identifier header.
@@ -120,9 +116,6 @@ enum {
 /* Sizes of UBI headers */
 #define UBI_EC_HDR_SIZE  sizeof(struct ubi_ec_hdr)
 #define UBI_VID_HDR_SIZE sizeof(struct ubi_vid_hdr)
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-#define UBI_HMAC_HDR_SIZE sizeof(struct ubi_hmac_hdr)
-#endif
 /* Sizes of UBI headers without the ending CRC */
 #define UBI_EC_HDR_SIZE_CRC  (UBI_EC_HDR_SIZE  - sizeof(__be32))
 #define UBI_VID_HDR_SIZE_CRC (UBI_VID_HDR_SIZE - sizeof(__be32))
@@ -290,11 +283,7 @@ struct ubi_vid_hdr {
 	__u8    compat;
 	__be32  vol_id;
 	__be32  lnum;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	__be32  hmac_hdr_offset;
-#else
 	__u8    padding1[4];
-#endif // CONFIG_UBI_CRYPTO_HMAC
 	__be32  data_size;
 	__be32  used_ebs;
 	__be32  data_pad;
@@ -431,12 +420,7 @@ struct ubi_vtbl_record {
 	__be16  name_len;
 	__u8    name[UBI_VOL_NAME_MAX+1];
 	__u8    flags;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	__u8    hmac;
-	__u8    padding[22];
-#else
 	__u8    padding[23];
-#endif // CONFIG_UBI_CRYPTO_HMAC
 	__be32  crc;
 } __packed;
 

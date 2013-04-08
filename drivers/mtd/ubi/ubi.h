@@ -575,21 +575,11 @@ struct ubi_device {
 	int ro_mode;
 	int leb_size;
 	int leb_start;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	int hmac_leb_size;
-	int hmac_leb_start;
-#endif
 	int ec_hdr_alsize;
 	int vid_hdr_alsize;
 	int vid_hdr_offset;
 	int vid_hdr_aloffset;
 	int vid_hdr_shift;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	int hmac_hdr_alsize;
-	int hmac_hdr_offset;
-	int hmac_hdr_aloffset;
-	int hmac_hdr_shift;
-#endif
 	unsigned int bad_allowed:1;
 	unsigned int nor_flash:1;
 	int max_write_size;
@@ -850,13 +840,6 @@ int ubi_io_read_vid_hdr(struct ubi_device *ubi, int pnum,
 			struct ubi_vid_hdr *vid_hdr, int verbose);
 int ubi_io_write_vid_hdr(struct ubi_device *ubi, int pnum,
 			 struct ubi_vid_hdr *vid_hdr);
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-int ubi_io_read_hmac_hdr(struct ubi_device *ubi, int pnum,
-			 struct ubi_hmac_hdr *hmac_hdr, int verbose);
-
-int ubi_io_write_hmac_hdr(struct ubi_device *ubi, int pnum,
-			 struct ubi_hmac_hdr *hmac_hdr);
-#endif
 /* build.c */
 int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num,
 		       int vid_hdr_offset, int max_beb_per1024);
@@ -955,47 +938,6 @@ static inline void ubi_free_vid_hdr(const struct ubi_device *ubi,
 
 	kfree(p - ubi->vid_hdr_shift);
 }
-
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-/**
- * ubi_zalloc_hmac_hdr - allocate a HMAC header object
- * @ubi: The UBI device description object
- * @gfp_flags: The flags used for the allocation
- *
- * This function returns a pointer to the newly allocated and zero-filled
- * HMAC header object in case of success and %NULL in case of failure.
- */
-static inline struct ubi_hmac_hdr *
-ubi_zalloc_hmac_hdr(const struct ubi_device *ubi, gfp_t gfp_flags)
-{
-	void *hmac_hdr;
-	hmac_hdr = kzalloc(ubi->hmac_hdr_alsize, gfp_flags);
-
-	if (!hmac_hdr)
-		return NULL;
-
-	/*
-	 * VID headers may be stored at un-aligned flash offsets, so we shift
-	 * the pointer.
-	 */
-	return hmac_hdr + ubi->hmac_hdr_shift;
-}
-
-/**
- * ubi_free_hmac_hdr - free a HMAC header object
- * @ubi: UBI device description object
- * @hmac_hdr: the HMAC header to free
- */
-static inline void ubi_free_hmac_hdr(const struct ubi_device *ubi,
-					struct ubi_hmac_hdr *hmac_hdr)
-{
-	void *p = hmac_hdr;
-	if (!p)
-		return;
-
-	kfree(p);
-}
-#endif
 
 /*
  * This function is equivalent to 'ubi_io_read()', but @offset is relative to

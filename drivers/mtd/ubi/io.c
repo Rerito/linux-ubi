@@ -694,16 +694,10 @@ static int validate_ec_hdr(const struct ubi_device *ubi,
 			vid_hdr_offset, ubi->vid_hdr_offset);
 		goto bad;
 	}
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	if ((leb_start != ubi->leb_start) &&
-			(leb_start != ubi->hmac_leb_start)) {
-		ubi_err("bad data offset %d, expected %d, or %d",
-				leb_start, ubi->leb_start, ubi->hmac_leb_start);
-#else
+
 	if (leb_start != ubi->leb_start) {
 		ubi_err("bad data offset %d, expected %d",
 			leb_start, ubi->leb_start);
-#endif
 		goto bad;
 	}
 
@@ -897,13 +891,7 @@ static int validate_vid_hdr(const struct ubi_device *ubi,
 	int used_ebs = be32_to_cpu(vid_hdr->used_ebs);
 	int data_pad = be32_to_cpu(vid_hdr->data_pad);
 	int data_crc = be32_to_cpu(vid_hdr->data_crc);
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	int usable_leb_size = (vid_hdr->hmac_hdr_offset) ?
-			ubi->hmac_leb_size - data_pad :
-			ubi->leb_size - data_pad;
-#else
 	int usable_leb_size = ubi->leb_size - data_pad;
-#endif
 
 	if (copy_flag != 0 && copy_flag != 1) {
 		ubi_err("bad copy_flag");
@@ -937,13 +925,6 @@ static int validate_vid_hdr(const struct ubi_device *ubi,
 		ubi_err("bad vol_type");
 		goto bad;
 	}
-
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	if (vid_hdr->hmac_hdr_offset != ubi->hmac_hdr_offset) {
-		ubi_err("bad hmac header offset");
-		goto bad;
-	}
-#endif
 
 	if (data_pad >= ubi->leb_size / 2) {
 		ubi_err("bad data_pad");
@@ -1139,61 +1120,6 @@ int ubi_io_write_vid_hdr(struct ubi_device *ubi, int pnum,
 	return err;
 }
 
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-
-int validate_hmac_hdr(const struct ubi_device *ubi,
-			 const struct ubi_hmac_hdr *hmac_hdr)
-{
-	return 0;
-}
-
-int ubi_io_read_hmac_hdr(struct ubi_device *ubi, int pnum,
-			 struct ubi_hmac_hdr *hmac_hdr, int verbose)
-{
-	return 0;
-}
-
-int ubi_io_write_hmac_hdr(struct ubi_device *ubi, int pnum,
-			 struct ubi_hmac_hdr *hmac_hdr)
-{
-	int err;
-	u32 crc;
-	void *p;
-	dbg_io("write HMAC header to PEB %d", pnum);
-	ubi_assert(pnum >= 0 && pnum < ubi->peb_count);
-
-	err = self_check_peb_vid_hdr(ubi, pnum);
-	if (err)
-		return err;
-	crc = CRC32(UBI_CRC32_INIT, hmac_hdr->htag,
-			sizeof(hmac_hdr->htag));
-	hmac_hdr->magic = UBI_HMAC_HDR_MAGIC;
-	hmac_hdr->htag_crc = cpu_to_be32(crc);
-
-	if (!ubi_check_pattern(hmac_hdr->top_hmac, 0xFF,
-			sizeof(hmac_hdr->top_hmac)+sizeof(__be32))) {
-		crc = CRC32(UBI_CRC32_INIT, hmac_hdr->top_hmac,
-				sizeof(hmac_hdr->top_hmac));
-		hmac_hdr->top_hmac_crc = cpu_to_be32(crc);
-	}
-
-	if (!ubi_check_pattern(hmac_hdr->btm_hmac, 0xFF,
-			sizeof(hmac_hdr->btm_hmac)+sizeof(__be32))) {
-		crc = CRC32(UBI_CRC32_INIT, hmac_hdr->btm_hmac,
-				sizeof(hmac_hdr->btm_hmac));
-		hmac_hdr->btm_hmac_crc = cpu_to_be32(crc);
-	}
-
-	err = self_check_hmac_hdr(ubi, pnum, hmac_hdr);
-	if (err)
-		return err;
-	p = hmac_hdr - ubi->hmac_hdr_shift;
-	err = ubi_io_write(ubi, p, pnum, ubi->hmac_hdr_aloffset,
-			ubi->hmac_hdr_alsize);
-	return err;
-}
-
-#endif
 /**
  * self_check_not_bad - ensure that a physical eraseblock is not bad.
  * @ubi: UBI device description object
@@ -1387,27 +1313,6 @@ exit:
 	ubi_free_vid_hdr(ubi, vid_hdr);
 	return err;
 }
-
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-static int self_check_hmac_hdr(const struct ubi_device *ubi, int pnum,
-		struct ubi_hmac_hdr *hmac_hdr)
-{
-	int err = 0;
-	u32 magic;
-	magic = be32_to_cpu(hmac_hdr->magic);
-	if (UBI_HMAC_HDR_MAGIC != magic) {
-		ubi_err("bad HMAC header magic %#08x at PEB %d, must be %#08x",
-			magic, pnum, HMAC_VID_HDR_MAGIC);
-	}
-
-	return err;
-}
-
-static int self_check_peb_hmac_hdr(const struct ubi_device *ubi, int pnum)
-{
-	int err = 0;
-}
-#endif
 
 /**
  * self_check_write - make sure write succeeded.

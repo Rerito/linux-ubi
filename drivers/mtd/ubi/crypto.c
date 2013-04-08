@@ -322,7 +322,6 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	 * FIXME : When HMAC support will be deployed,
 	 * We must determine which key has to be used.
 	 */
-#ifndef UBI_CRYPTO_HMAC
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
 		printk("%s - No kentry, omitting ciphering.\n", __func__ );
 		if (info->dst != info->src) {
@@ -333,14 +332,6 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 		goto exit;
 	}
 	key = &k->cur;
-#else
-	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr, k);
-	if (BAD_PTR(key)) {
-		printk("Cannot proceed ! We do not own the key");
-		err = -EACCES;
-		goto exit;
-	}
-#endif
 	/*
 	 * TODO : Add HMAC checkings
 	 * If the checking fails, simply memcpy the data

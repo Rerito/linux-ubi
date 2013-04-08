@@ -9,10 +9,6 @@
 #include <linux/rbtree.h>
 #include "ubi.h"
 
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-#include "cryptokval.h"
-#endif
-
 /**
  * struct ubi_key_tree - A UBI device's key tree
  * @root: The root of the key tree
@@ -66,13 +62,6 @@ struct ubi_key_tree {
 struct ubi_key {
 	__u8 *key;
 	size_t key_len;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	__u32 refcount;
-	struct list_head entry;
-	struct ubi_kval_tree val_tree;
-	__u8 obsolete;
-	struct mutex mutex;
-#endif // CONFIG_UBI_CRYPTO_HMAC
 };
 
 /**
@@ -97,40 +86,10 @@ struct ubi_key_entry {
 	__u32 in_use;
 	__u8 dying, upd;
 	struct mutex mutex;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	__u8 tagged;
-	void *vol;
-	struct list_head key_ring;
-	struct ubi_key *main;
-	struct rw_semaphore kr_sem;
-	struct ubi_kval_tree unknown;
-	__u32 reserved_ebs;
-	struct work_struct upd_worker;
-	__u8 reset_upd;
-#else
 	struct ubi_key cur;
-#endif // CONFIG_UBI_CRYPTO_HMAC
 };
 
 extern struct ubi_key_tree ubi_kmgr_ktree[UBI_MAX_DEVICES];
-
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-typedef int (*ubi_kmgr_key_lu_func)(struct ubi_key*,
-		void*);
-struct ubi_key_value {
-	__u8 *k;
-	size_t len;
-};
-
-/*
- * Look up functions
- */
-struct ubi_key *ubi_kmgr_key_lookup(struct ubi_key_entry *kentry,
-		ubi_kmgr_key_lu_func lookup, void *private);
-struct ubi_key *ubi_kmgr_key_lu_by_value(struct ubi_key_entry *kentry,
-		__u8 *raw_key, size_t len);
-
-#endif // CONFIG_UBI_CRYPTO_HMAC
 
 struct ubi_key_entry *ubi_kmgr_get_kentry(struct ubi_key_tree *tree,
 		__be32 vol_id);

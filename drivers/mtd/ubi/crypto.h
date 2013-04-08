@@ -29,10 +29,6 @@ struct ubi_crypto_cipher_info {
 	size_t len;
 	void *src, *dst;
 	struct ubi_vid_hdr *vid_hdr;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	struct ubi_hmac_hdr *hmac_hdr;
-#endif
-
 };
 
 #define UBI_CRYPTO_CHUNK_SIZE 8

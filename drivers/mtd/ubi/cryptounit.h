@@ -88,9 +88,6 @@ struct ubi_crypto_tfm {
 struct ubi_crypto_unit {
 	struct list_head node;
 	struct ubi_crypto_tfm aes;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	struct ubi_crypto_tfm hmac;
-#endif
 	unsigned long last_use;
 	struct mutex mutex;
 	__u8 dying, in_use;
