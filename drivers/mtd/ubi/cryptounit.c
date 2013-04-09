@@ -290,11 +290,6 @@ static void ubi_cru_clear_pool(struct ubi_crypto_unit_pool *pool)
 	pool->n_unit = 0;
 	pool->disposed = 1;
 	mutex_unlock(&pool->mutex);
-	/* FIXME
-	 * The pool must be marked as being cleaned
-	 * Otherwise, new unit could be created while the cleaning
-	 * process is running.
-	 */
 	while(!list_empty(&del_list)) {
 		node = del_list.next;
 		unit = list_entry(node, struct ubi_crypto_unit, node);
