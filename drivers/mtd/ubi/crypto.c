@@ -41,8 +41,6 @@
 	} while (0)
 
 
-
-
 static inline __u8 *ubi_crypto_compute_iv(__be64 sqnum, int offset, int klen);
 
 static int ubi_crypto_get_sg(struct scatterlist **sg,
