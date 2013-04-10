@@ -87,4 +87,10 @@ config MTD_UBI_GLUEBI
 	   work on top of UBI. Do not enable this unless you use legacy
 	   software.
 
+config MTD_UBI_CRYPTO
+	bool "UBI Cryptographic Support"
+	default n
+	help
+	   Enable AES-CTR encryption of UBI user volumes. The key for a volume
+	   must be set through an ioctl command.
 endif # MTD_UBI

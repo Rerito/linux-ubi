@@ -52,6 +52,8 @@ void ubi_dump_vid_hdr(const struct ubi_vid_hdr *vid_hdr);
 #define dbg_io(fmt, ...)  ubi_dbg_msg("io", fmt, ##__VA_ARGS__)
 /* Initialization and build messages */
 #define dbg_bld(fmt, ...) ubi_dbg_msg("bld", fmt, ##__VA_ARGS__)
+/* Cryptographic sub-system messages */
+#define dbg_crypto(fmt, ...) ubi_dbg_msg("crypto", fmt, ##__VA_ARGS__)
 
 void ubi_dump_vol_info(const struct ubi_volume *vol);
 void ubi_dump_vtbl_record(const struct ubi_vtbl_record *r, int idx);
