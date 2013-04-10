@@ -58,6 +58,16 @@ struct ubi_crypto_unit *ubi_cru_alloc_unit(void)
 		err = PTR_ERR(p->aes.tfm);
 		goto exit;
 	}
+
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	p->hmac.tfm = (struct crypto_tfm*)crypto_alloc_aead("hmac(aes)", 0, 0);
+	if (IS_ERR(p->hmac.tfm)) {
+		crypto_free_blkcipher((struct crypto_blkcipher*)p->aes.tfm);
+		err = PTR_ERR(p->hmac.tfm);
+		goto exit;
+	}
+	mutex_init(&p->hmac.mutex);
+#endif
 	mutex_init(&p->mutex);
 	mutex_init(&p->aes.mutex);
 
@@ -94,6 +104,11 @@ static void ubi_cru_free_unit(struct ubi_crypto_unit *unit)
 	crypto_free_blkcipher((struct crypto_blkcipher*)unit->aes.tfm);
 	unit->aes.tfm = NULL;
 	mutex_unlock(&unit->aes.mutex);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	mutex_lock(&unit->hmac.mutex);
+	crypto_free_aead((struct crypto_aead*)unit->hmac.tfm);
+	mutex_unlock(&unit->hmac.mutex);
+#endif
 	mutex_unlock(&unit->mutex);
 	kfree(unit);
 }
