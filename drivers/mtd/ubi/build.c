@@ -42,6 +42,9 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include "ubi.h"
+#ifdef CONFIG_MTD_UBI_CRYPTO
+#include "crypto.h"
+#endif // CONFIG_MTD_UBI_CRYPTO
 
 /* Maximum length of the 'mtd=' parameter */
 #define MTD_PARAM_LEN_MAX 64
@@ -1289,7 +1292,9 @@ static int __init ubi_init(void)
 				goto out_detach;
 		}
 	}
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	ubi_crypto_init();
+#endif // CONFIG_MTD_UBI_CRYPTO
 	return 0;
 
 out_detach:
@@ -1329,6 +1334,9 @@ static void __exit ubi_exit(void)
 	misc_deregister(&ubi_ctrl_cdev);
 	class_remove_file(ubi_class, &ubi_version);
 	class_destroy(ubi_class);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	ubi_crypto_term();
+#endif // CONFIG_MTD_UBI_CRYPTO
 }
 module_exit(ubi_exit);
 
