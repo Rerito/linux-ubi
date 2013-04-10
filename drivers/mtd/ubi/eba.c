@@ -46,6 +46,11 @@
 #include <linux/err.h>
 #include "ubi.h"
 
+#ifdef CONFIG_MTD_UBI_CRYPTO
+#include "crypto.h"
+#endif
+
+
 /* Number of physical eraseblocks reserved for atomic LEB change operation */
 #define EBA_RESERVED_PEBS 1
 
@@ -373,7 +378,11 @@ int ubi_eba_read_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 		     void *buf, int offset, int len, int check)
 {
 	int err, pnum, scrub = 0, vol_id = vol->vol_id;
-	struct ubi_vid_hdr *vid_hdr;
+	struct ubi_vid_hdr *vid_hdr = NULL;
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	int data_size = len, err_cipher = 0;
+	void *crypt = NULL;
+#endif // CONFIG_MTD_UBI_CRYPTO
 	uint32_t uninitialized_var(crc);
 
 	err = leb_read_lock(ubi, vol_id, lnum);
@@ -438,8 +447,46 @@ retry:
 		crc = be32_to_cpu(vid_hdr->data_crc);
 		ubi_free_vid_hdr(ubi, vid_hdr);
 	}
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	if (!crypt) {
+		if (len > 2*PAGE_SIZE) {
+			crypt = vmalloc(len);
+		} else {
+			crypt = kmalloc(len, GFP_NOFS);
+		}
+	}
+	if (!crypt) {
+		err = -ENOMEM;
+		goto out_unlock;
+	}
+	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
+	if (!vid_hdr) {
+		err = -ENOMEM;
+		goto out_unlock;
+	}
+	err = ubi_io_read_vid_hdr(ubi, pnum, vid_hdr, 0);
+	if (err) {
+		goto out_free;
+	}
+	err = ubi_io_read_data(ubi, crypt, pnum, offset, len);
+	if (!(len & (ubi->min_io_size - 1))) {
+		data_size = ubi_calc_data_len(ubi, crypt, len);
+	}
+	if (data_size < len) {
+		memset(buf+data_size, 0xFF, len - data_size);
+	}
+	err_cipher = ubi_crypto_decipher(
+			ubi->ubi_num, vid_hdr,
+			crypt, buf, data_size, offset
+			);
+	if (0 > err_cipher) {
 
+	}
+	ubi_free_vid_hdr(ubi, vid_hdr);
+	vid_hdr = NULL;
+#else
 	err = ubi_io_read_data(ubi, buf, pnum, offset, len);
+#endif // CONFIG_MTD_UBI_CRYPTO
 	if (err) {
 		if (err == UBI_IO_BITFLIPS) {
 			scrub = 1;
@@ -447,6 +494,7 @@ retry:
 		} else if (mtd_is_eccerr(err)) {
 			if (vol->vol_type == UBI_DYNAMIC_VOLUME)
 				goto out_unlock;
+
 			scrub = 1;
 			if (!check) {
 				ubi_msg("force data checking");
@@ -476,6 +524,9 @@ retry:
 out_free:
 	ubi_free_vid_hdr(ubi, vid_hdr);
 out_unlock:
+#ifdef 	CONFIG_MTD_UBI_CRYPTO
+	SAFE_FREE(crypt);
+#endif
 	leb_read_unlock(ubi, vol_id, lnum);
 	return err;
 }
@@ -502,7 +553,10 @@ static int recover_peb(struct ubi_device *ubi, int pnum, int vol_id, int lnum,
 	int err, idx = vol_id2idx(ubi, vol_id), new_pnum, data_size, tries = 0;
 	struct ubi_volume *vol = ubi->volumes[idx];
 	struct ubi_vid_hdr *vid_hdr;
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	void *crypt = NULL;
+	__be64 old_sqnum, new_sqnum;
+#endif
 	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
 	if (!vid_hdr)
 		return -ENOMEM;
@@ -522,7 +576,9 @@ retry:
 			err = -EIO;
 		goto out_put;
 	}
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	old_sqnum = vid_hdr->sqnum;
+#endif
 	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 	err = ubi_io_write_vid_hdr(ubi, new_pnum, vid_hdr);
 	if (err)
@@ -531,13 +587,52 @@ retry:
 	data_size = offset + len;
 	mutex_lock(&ubi->buf_mutex);
 	memset(ubi->peb_buf + offset, 0xFF, len);
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
+			buf, ubi->peb_buf+offset, len, offset);
+	if (err && -ENODATA != err) {
+		goto out_unlock;
+	}
+#endif
 	/* Read everything before the area where the write failure happened */
 	if (offset > 0) {
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		if (!crypt) {
+			if (offset > 2*PAGE_SIZE) {
+				crypt = vmalloc(offset);
+			} else {
+				crypt = kmalloc(offset, GFP_NOFS);
+			}
+		}
+		if (!crypt) {
+			ubi_free_vid_hdr(ubi, vid_hdr);
+			err = -ENOMEM;
+			goto out_unlock;
+		}
+		err = ubi_io_read_data(ubi, crypt, pnum, 0, offset);
+#else
 		err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, offset);
+#endif
 		if (err && err != UBI_IO_BITFLIPS)
 			goto out_unlock;
 	}
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	/* Swap the old and new sqnum */
+	new_sqnum = vid_hdr->sqnum;
+	vid_hdr->sqnum = old_sqnum;
+	err = ubi_crypto_decipher(ubi->ubi_num, vid_hdr,
+			crypt, ubi->peb_buf, offset, 0);
+	if (err && -ENODATA != err) {
+		goto out_unlock;
+	}
+	vid_hdr->sqnum = new_sqnum;
+	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
+			crypt, ubi->peb_buf, offset, 0);
+	if (err && -ENODATA != err) {
+		goto out_unlock;
+	}
+
+#endif
 
 	memcpy(ubi->peb_buf + offset, buf, len);
 
@@ -547,6 +642,7 @@ retry:
 		goto write_error;
 	}
 
+
 	mutex_unlock(&ubi->buf_mutex);
 	ubi_free_vid_hdr(ubi, vid_hdr);
 
@@ -554,6 +650,9 @@ retry:
 	vol->eba_tbl[lnum] = new_pnum;
 	up_read(&ubi->fm_sem);
 	ubi_wl_put_peb(ubi, vol_id, lnum, pnum, 1);
+#ifdef CONFIG_UBI_MTD_CRYPTO
+	SAFE_FREE(crypt);
+#endif
 
 	ubi_msg("data was successfully recovered");
 	return 0;
@@ -563,6 +662,9 @@ out_unlock:
 out_put:
 	ubi_wl_put_peb(ubi, vol_id, lnum, new_pnum, 1);
 	ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_MTD_CRYPTO
+	SAFE_FREE(crypt);
+#endif
 	return err;
 
 write_error:
@@ -574,6 +676,9 @@ write_error:
 	ubi_wl_put_peb(ubi, vol_id, lnum, new_pnum, 1);
 	if (++tries > UBI_IO_RETRIES) {
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_MTD_CRYPTO
+		SAFE_FREE(crypt);
+#endif
 		return err;
 	}
 	ubi_msg("try again");
@@ -598,11 +703,13 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 		      const void *buf, int offset, int len)
 {
 	int err, pnum, tries = 0, vol_id = vol->vol_id;
+	int i;
 	struct ubi_vid_hdr *vid_hdr;
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	void *crypt = NULL;
+#endif
 	if (ubi->ro_mode)
 		return -EROFS;
-
 	err = leb_write_lock(ubi, vol_id, lnum);
 	if (err)
 		return err;
@@ -611,13 +718,40 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 	if (pnum >= 0) {
 		dbg_eba("write %d bytes at offset %d of LEB %d:%d, PEB %d",
 			len, offset, vol_id, lnum, pnum);
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
+		if (!vid_hdr) {
+			err = -ENOMEM;
+		}
+		err = ubi_io_read_vid_hdr(ubi, pnum, vid_hdr, 0);
+		if (err) {
+			ubi_free_vid_hdr(ubi, vid_hdr);
+			return err;
+		}
+		if (len > 2*PAGE_SIZE) {
+			crypt = vmalloc(len);
+		} else {
+			crypt = kzalloc(len, GFP_NOFS);
+		}
+		if (!crypt) {
+			ubi_free_vid_hdr(ubi, vid_hdr);
+			return -ENOMEM;
+		}
+		err = ubi_crypto_cipher(
+				ubi->ubi_num, vid_hdr, buf, crypt, len, offset
+				);
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		vid_hdr = NULL;
+		err = ubi_io_write_data(ubi, crypt, pnum, offset, len);
+		SAFE_FREE(crypt);
+#else
 		err = ubi_io_write_data(ubi, buf, pnum, offset, len);
+#endif // CONFIG_MTD_UBI_CRYPTO
 		if (err) {
 			ubi_warn("failed to write data to PEB %d", pnum);
 			if (err == -EIO && ubi->bad_allowed)
 				err = recover_peb(ubi, pnum, vol_id, lnum, buf,
-						  offset, len);
+						offset, len);
 			if (err)
 				ubi_ro_mode(ubi);
 		}
@@ -661,7 +795,29 @@ retry:
 	}
 
 	if (len) {
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		if (!crypt) {
+			if (len > 2*PAGE_SIZE) {
+				crypt = vmalloc(len);
+			} else {
+				crypt = kzalloc(len, GFP_NOFS);
+			}
+		}
+		if (!crypt) {
+			ubi_free_vid_hdr(ubi, vid_hdr);
+			return -ENOMEM;
+		}
+
+		err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr, buf, crypt, len, offset);
+		if (err) {
+			ubi_free_vid_hdr(ubi, vid_hdr);
+			SAFE_FREE(buf);
+			return err;
+		}
+		err = ubi_io_write_data(ubi, crypt, pnum, offset, len);
+#else
 		err = ubi_io_write_data(ubi, buf, pnum, offset, len);
+#endif // CONFIG_MTD_UBI_CRYPTO
 		if (err) {
 			ubi_warn("failed to write %d bytes at offset %d of LEB %d:%d, PEB %d",
 				 len, offset, vol_id, lnum, pnum);
@@ -673,6 +829,9 @@ retry:
 	vol->eba_tbl[lnum] = pnum;
 	up_read(&ubi->fm_sem);
 
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	SAFE_FREE(crypt);
+#endif
 	leb_write_unlock(ubi, vol_id, lnum);
 	ubi_free_vid_hdr(ubi, vid_hdr);
 	return 0;
@@ -682,6 +841,9 @@ write_error:
 		ubi_ro_mode(ubi);
 		leb_write_unlock(ubi, vol_id, lnum);
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		SAFE_FREE(crypt);
+#endif
 		return err;
 	}
 
@@ -695,6 +857,9 @@ write_error:
 		ubi_ro_mode(ubi);
 		leb_write_unlock(ubi, vol_id, lnum);
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		SAFE_FREE(crypt);
+#endif
 		return err;
 	}
 
@@ -731,7 +896,9 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
 	int err, pnum, tries = 0, data_size = len, vol_id = vol->vol_id;
 	struct ubi_vid_hdr *vid_hdr;
 	uint32_t crc;
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	void *crypt = NULL;
+#endif
 	if (ubi->ro_mode)
 		return -EROFS;
 
@@ -751,26 +918,56 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
 		return err;
 	}
 
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	if (len > 2*PAGE_SIZE) {
+		crypt = vmalloc(len);
+	} else {
+		crypt = kmalloc(len, GFP_NOFS);
+	}
+	if (NULL == crypt) {
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		return -ENOMEM;
+	}
+#endif // CONFIG_MTD_UBI_CRYPTO
+
 	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 	vid_hdr->vol_id = cpu_to_be32(vol_id);
 	vid_hdr->lnum = cpu_to_be32(lnum);
 	vid_hdr->compat = ubi_get_compat(ubi, vol_id);
 	vid_hdr->data_pad = cpu_to_be32(vol->data_pad);
-
+#ifndef CONFIG_MTD_UBI_CRYPTO
 	crc = crc32(UBI_CRC32_INIT, buf, data_size);
+#endif
 	vid_hdr->vol_type = UBI_VID_STATIC;
 	vid_hdr->data_size = cpu_to_be32(data_size);
 	vid_hdr->used_ebs = cpu_to_be32(used_ebs);
+#ifndef CONFIG_MTD_UBI_CRYPTO
 	vid_hdr->data_crc = cpu_to_be32(crc);
+#endif
 
 retry:
 	pnum = ubi_wl_get_peb(ubi);
 	if (pnum < 0) {
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		leb_write_unlock(ubi, vol_id, lnum);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		SAFE_FREE(crypt);
+#endif // CONFIG_MTD_UBI_CRYPTO
 		return pnum;
 	}
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
+			buf, crypt, 0, len);
+	if (err) {
+		dbg_eba("Error while ciphering the data : %d", err);
+		leb_write_unlock(ubi, vol_id, lnum);
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		SAFE_FREE(crypt);
+		return err;
+	}
+	crc = crc32(UBI_CRC32_INIT, crypt, data_size);
+	vid_hdr->data_crc = cpu_to_be32(crc);
+#endif // CONFIG_MTD_UBI_CRYPTO
 	dbg_eba("write VID hdr and %d bytes at LEB %d:%d, PEB %d, used_ebs %d",
 		len, vol_id, lnum, pnum, used_ebs);
 
@@ -795,6 +992,9 @@ retry:
 
 	leb_write_unlock(ubi, vol_id, lnum);
 	ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	SAFE_FREE(crypt);
+#endif // CONFIG_MTD_UBI_CRYPTO
 	return 0;
 
 write_error:
@@ -815,6 +1015,9 @@ write_error:
 		ubi_ro_mode(ubi);
 		leb_write_unlock(ubi, vol_id, lnum);
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		SAFE_FREE(crypt);
+#endif // CONFIG_MTD_UBI_CRYPTO
 		return err;
 	}
 
@@ -846,7 +1049,9 @@ int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 	int err, pnum, tries = 0, vol_id = vol->vol_id;
 	struct ubi_vid_hdr *vid_hdr;
 	uint32_t crc;
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	void *crypt = NULL;
+#endif // CONFIG_MTD_UBI_CRYPTO
 	if (ubi->ro_mode)
 		return -EROFS;
 
@@ -876,11 +1081,15 @@ int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 	vid_hdr->compat = ubi_get_compat(ubi, vol_id);
 	vid_hdr->data_pad = cpu_to_be32(vol->data_pad);
 
+#ifndef CONFIG_MTD_UBI_CRYPTO
 	crc = crc32(UBI_CRC32_INIT, buf, len);
+#endif
 	vid_hdr->vol_type = UBI_VID_DYNAMIC;
 	vid_hdr->data_size = cpu_to_be32(len);
 	vid_hdr->copy_flag = 1;
+#ifndef CONFIG_MTD_UBI_CRYPTO
 	vid_hdr->data_crc = cpu_to_be32(crc);
+#endif
 
 retry:
 	pnum = ubi_wl_get_peb(ubi);
@@ -891,7 +1100,24 @@ retry:
 
 	dbg_eba("change LEB %d:%d, PEB %d, write VID hdr to PEB %d",
 		vol_id, lnum, vol->eba_tbl[lnum], pnum);
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	if (len > 2*PAGE_SIZE) {
+		crypt = vmalloc(len);
+	} else {
+		crypt = kmalloc(len, GFP_NOFS);
+	}
+	if (NULL == crypt) {
+		err = -ENOMEM;
+		goto out_leb_unlock;
+	}
+	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
+			buf, crypt, len, 0);
+	if (err) {
+		goto out_leb_unlock;
+	}
+	crc = crc32(UBI_CRC32_INIT, crypt, len);
+	vid_hdr->data_crc = cpu_to_be32(crc);
+#endif // CONFIG_MTD_UBI_CRYPTO
 	err = ubi_io_write_vid_hdr(ubi, pnum, vid_hdr);
 	if (err) {
 		ubi_warn("failed to write VID header to LEB %d:%d, PEB %d",
@@ -899,7 +1125,11 @@ retry:
 		goto write_error;
 	}
 
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	err = ubi_io_write_data(ubi, crypt, pnum, 0, len);
+#else
 	err = ubi_io_write_data(ubi, buf, pnum, 0, len);
+#endif // CONFIG_MTD_UBI_CRYPTO
 	if (err) {
 		ubi_warn("failed to write %d bytes of data to PEB %d",
 			 len, pnum);
@@ -921,6 +1151,9 @@ out_leb_unlock:
 out_mutex:
 	mutex_unlock(&ubi->alc_mutex);
 	ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	SAFE_FREE(crypt);
+#endif // CONFIG_MTD_UBI_CRYPTO
 	return err;
 
 write_error:
@@ -992,10 +1225,11 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 	int err, vol_id, lnum, data_size, aldata_size, idx;
 	struct ubi_volume *vol;
 	uint32_t crc;
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	void *crypt = NULL;
+#endif
 	vol_id = be32_to_cpu(vid_hdr->vol_id);
 	lnum = be32_to_cpu(vid_hdr->lnum);
-
 	dbg_wl("copy LEB %d:%d, PEB %d to PEB %d", vol_id, lnum, from, to);
 
 	if (vid_hdr->vol_type == UBI_VID_STATIC) {
@@ -1084,9 +1318,15 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 		aldata_size = data_size =
 			ubi_calc_data_len(ubi, ubi->peb_buf, data_size);
 
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	if (0 >= data_size) {
+#endif
 	cond_resched();
 	crc = crc32(UBI_CRC32_INIT, ubi->peb_buf, data_size);
 	cond_resched();
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	}
+#endif
 
 	/*
 	 * It may turn out to be that the whole @from physical eraseblock
@@ -1095,12 +1335,42 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 	 * @vid_hdr->copy_flag, @vid_hdr->data_size, and @vid_hdr->data_crc.
 	 */
 	if (data_size > 0) {
-		vid_hdr->copy_flag = 1;
-		vid_hdr->data_size = cpu_to_be32(data_size);
-		vid_hdr->data_crc = cpu_to_be32(crc);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		if (data_size > 2*PAGE_SIZE) {
+			crypt = vmalloc(data_size);
+		} else {
+			crypt = kmalloc(data_size, GFP_NOFS);
+		}
+		if (NULL == crypt) {
+			err = MOVE_RETRY;
+			goto out_unlock_buf;
+		}
+		err = ubi_crypto_decipher(ubi->ubi_num, vid_hdr,
+				ubi->peb_buf, crypt, data_size, 0);
+		if (err) {
+			err = MOVE_TARGET_WR_ERR;
+			goto out_unlock_buf;
+		}
+#endif // CONFIG_MTD_UBI_CRYPTO
 	}
-	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 
+	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	if (data_size > 0) {
+		err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
+				crypt, ubi->peb_buf, data_size, 0);
+		if (err) {
+			err = MOVE_TARGET_WR_ERR;
+			goto out_unlock_buf;
+		}
+		cond_resched();
+		crc = crc32(UBI_CRC32_INIT, crypt, data_size);
+		cond_resched();
+	}
+#endif // CONFIG_MTD_UBI_CRYPTO
+	vid_hdr->copy_flag = 1;
+	vid_hdr->data_size = cpu_to_be32(data_size);
+	vid_hdr->data_crc = cpu_to_be32(crc);
 	err = ubi_io_write_vid_hdr(ubi, to, vid_hdr);
 	if (err) {
 		if (err == -EIO)
@@ -1169,6 +1439,9 @@ out_unlock_buf:
 	mutex_unlock(&ubi->buf_mutex);
 out_unlock_leb:
 	leb_write_unlock(ubi, vol_id, lnum);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	SAFE_FREE(crypt);
+#endif
 	return err;
 }
 
