@@ -45,6 +45,9 @@
 #include <linux/math64.h>
 #include <mtd/ubi-user.h>
 #include "ubi.h"
+#ifdef CONFIG_MTD_UBI_CRYPTO
+#include "crypto.h"
+#endif
 
 /**
  * get_exclusive - get exclusive access to an UBI volume.
@@ -584,6 +587,44 @@ static long vol_cdev_ioctl(struct file *file, unsigned int cmd,
 		}
 		break;
 	}
+
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	/* Set volume key command */
+	case UBI_IOCSETVOLKEY:
+	{
+		struct ubi_set_vol_key_req req;
+		struct ubi_key_tree *tree;
+		__be32 vid;
+		err = copy_from_user(&req, argp,
+				sizeof(req));
+		if (err) {
+			err = -EFAULT;
+			break;
+		}
+		printk("Received IOCSETVOLKEY ioctl.\n");
+		tree = ubi_kmgr_get_tree(vol->ubi->ubi_num);
+		vid = cpu_to_be32(vol->vol_id);
+		if (!req.rm) {
+			err = ubi_kmgr_vol_setkey(tree, vid,
+					req.k, sizeof(req.k),
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+					req.main
+#else
+					1);
+#endif // CONFIG_UBI_CRYPTO_HMAC
+		} else {
+			err = ubi_kmgr_vol_setkey(tree, vid,
+					NULL, 0,
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+					req.main
+#else
+					1);
+#endif // CONFIG_UBI_CRYPTO_HMAC
+		}
+		ubi_kmgr_put_tree(tree);
+		break;
+	}
+#endif // CONFIG_MTD_UBI_CRYPTO
 
 	default:
 		err = -ENOTTY;
