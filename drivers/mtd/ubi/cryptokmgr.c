@@ -28,11 +28,7 @@
 
 #define BAD_PTR(ptr) ((NULL == (ptr)) || (IS_ERR((ptr))))
 
-#ifndef CONFIG_DYNAMIC_KTREE
 struct ubi_key_tree ubi_kmgr_ktree[UBI_MAX_DEVICES];
-#else
-struct ubi_kmgr_tree ubi_kmgr_ktrees;
-#endif
 
 /* ######################################################################### */
 /* ##################### STATIC FUNCTIONS DECLARATIONS ##################### */

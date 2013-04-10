@@ -10,8 +10,6 @@
 
 struct ubi_vid_hdr;
 
-#define UBI_CRYPTO_CHUNK_SIZE 8
-
 #ifndef BAD_PTR
 #define BAD_PTR(ptr) ((NULL == (ptr)) || (IS_ERR((ptr))))
 #endif
