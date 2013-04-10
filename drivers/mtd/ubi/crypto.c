@@ -29,6 +29,7 @@
 #include "ubi-media.h"
 #include "debug.h"
 #include <linux/scatterlist.h>
+#include <linux/string.h>
 
 #define TRACE_ENTER(fmt, ...) do {\
 	printk(KERN_ALERT "%s - Enter :\n" fmt,__func__, ##__VA_ARGS__);\
@@ -321,6 +322,9 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 		err = 0;
 		goto exit;
 	}
+#ifndef CONFIG_UBI_CRYPTO_HMAC
+	key = &k->cur;
+#endif
 	/*
 	 * TODO : Add HMAC checkings
 	 * If the checking fails, simply memcpy the data

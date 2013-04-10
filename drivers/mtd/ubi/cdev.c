@@ -600,7 +600,6 @@ static long vol_cdev_ioctl(struct file *file, unsigned int cmd,
 			err = -EFAULT;
 			break;
 		}
-		printk("Received IOCSETVOLKEY ioctl.\n");
 		tree = ubi_kmgr_get_tree(vol->ubi->ubi_num);
 		vid = cpu_to_be32(vol->vol_id);
 		if (!req.rm) {
