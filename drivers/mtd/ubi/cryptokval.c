@@ -44,9 +44,9 @@ static int ubi_kval_insert_no_ovlap(struct ubi_kval_tree *tree, u32 d, u32 u)
 {
 	struct ubi_kval_node *node, *i;
 	struct rb_node **p, *parent;
-	*p = tree->root.rb_node;
+	p = &tree->root.rb_node;
 	parent = *p;
-	if (NULL == (kmalloc(sizeof(*node), GFP_KERNEL))) {
+	if (NULL == (node = kmalloc(sizeof(*node), GFP_KERNEL))) {
 		return -ENOMEM;
 	}
 	node->d = d;
@@ -106,7 +106,7 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 		}
 		list_add(&entry->entry, &lookup_list);
 	}
-	while (!list_empty(lookup_list)) {
+	while (!list_empty(&lookup_list)) {
 		/* Pop the head of @lookup_list */
 		entry = list_entry(lookup_list.next,
 				struct ubi_kval_lookup_entry, entry);
@@ -325,6 +325,21 @@ int ubi_kval_is_in_tree(struct ubi_kval_tree *tree, u32 x)
 	}
 	up_read(&tree->sem);
 	return ret;
+}
+
+struct ubi_kval_node *ubi_kval_get_rightmost(struct ubi_kval_tree *tree)
+{
+	struct rb_node *n = ERR_PTR(-ENODATA);
+	struct ubi_kval_node *rmost;
+	if (BAD_TPR(tree)) {
+		return -EINVAL;
+	}
+	n = tree->root.rb_node;
+	while (NULL != n) {
+		rmost = rb_entry(n, struct ubi_kval_node, node);
+		n = n->rb_right;
+	}
+	return rmost;
 }
 
 int ubi_kval_init_tree(struct ubi_kval_tree *tree)

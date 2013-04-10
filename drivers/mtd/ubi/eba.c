@@ -1060,6 +1060,89 @@ write_error:
 	ubi_msg("try another PEB");
 	goto retry;
 }
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+
+struct ubi_hmac_lu_data {
+	struct ubi_crypto_unit *unit;
+	struct ubi_vid_hdr *vid_hdr;
+	struct ubi_hmac_hdr *hmac_hdr;
+	__be32 pnum;
+};
+
+static int hmac_tag_lookup(struct ubi_key *key, void *p)
+{
+	int err = 0, i = 0;
+	u8 hmac_tag_out[16];
+	u8 hmac_tag_in[20];
+	struct ubi_hmac_lu_data *d = p;
+	if (BAD_PTR(d)) {
+		return 0;
+	}
+
+	memcpy(&hmac_tag_in[i], &d->vid_hdr->vol_id,
+			sizeof(d->vid_hdr->vol_id));
+	i += sizeof(d->vid_hdr->vol_id);
+	memcpy(&hmac_tag_in[i], &d->vid_hdr->lnum,
+			sizeof(d->vid_hdr->lnum));
+	i += sizeof(d->vid_hdr->lnum);
+	memcpy(&hmac_tag_in[i], &d->vid_hdr->sqnum,
+			sizeof(d->vid_hdr->sqnum));
+	i += sizeof(d->vid_hdr->sqnum);
+	memcpy(&hmac_tag_in[i], &d->pnum, sizeof(d->pnum));
+
+//	crypto_hash_digest();
+}
+
+int ubi_eba_update_leb(struct ubi_device *ubi, struct ubi_volume *vol,
+		int lnum)
+{
+	int err = 0;
+	int pnum;
+	struct ubi_vid_hdr *vid_hdr = NULL;
+	struct ubi_hmac_hdr *hmac_hdr = NULL;
+	struct ubi_key *cur_key = NULL;
+
+	if (BAD_PTR(ubi) || BAD_PTR(vol))
+		return -EINVAL;
+
+	if (ubi->ro_mode)
+		return -EROFS;
+
+	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
+	if (!vid_hdr)
+		return -ENOMEM;
+
+	err = leb_write_lock(ubi, vol->vol_id, lnum);
+	if (err) {
+		goto out_free;
+	}
+	if (-1 == (pnum = vol->eba_tbl[lnum])) {
+		goto out_unlock;
+	}
+	err = ubi_io_read_vid_hdr(ubi, pnum, vid_hdr, 1);
+	if (err) {
+
+	}
+
+	/*
+	 *  3. Read HMAC hdr
+	 *  4. Find the key in use
+	 *  5. Lock LEB buffer
+	 *  6. Read LEB data
+	 *  7. Cipher them to the dest key
+	 *  8. Write headers
+	 *  9. Write buffer
+	 * 10. Unlock
+	 */
+
+
+	out_unlock:
+	leb_write_unlock(ubi, vol->vol_id, lnum);
+	out_free:
+	ubi_free_vid_hdr(ubi, vid_hdr);
+	return err;
+}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 /*
  * ubi_eba_atomic_leb_change - change logical eraseblock atomically.

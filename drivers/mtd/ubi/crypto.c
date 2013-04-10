@@ -41,8 +41,6 @@
 	} while (0)
 
 
-
-
 static inline __u8 *ubi_crypto_compute_iv(__be64 sqnum, int offset, int klen);
 
 static int ubi_crypto_get_sg(struct scatterlist **sg,
@@ -292,6 +290,7 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	struct ubi_key_entry *k = NULL;
 	struct ubi_key *key = NULL;
 	struct ubi_key_tree *tree = NULL;
+	struct ubi_hmac_hdr *hmac_hdr = NULL;
 	__u8 *iv = NULL;
 	if (BAD_PTR(info->vid_hdr)) {
 		return -EINVAL;
@@ -320,9 +319,9 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	k = ubi_kmgr_get_kentry(tree, info->vid_hdr->vol_id);
 	/*
 	 * FIXME : When HMAC support will be deployed,
-	 * We must add an additional parameter to this function to state
-	 * if we want to use "old" or "cur" key value.
+	 * We must determine which key has to be used.
 	 */
+#ifndef UBI_CRYPTO_HMAC
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
 		printk("%s - No kentry, omitting ciphering.\n", __func__ );
 		if (info->dst != info->src) {
@@ -332,7 +331,6 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 		err = 0;
 		goto exit;
 	}
-#ifndef CONFIG_UBI_CRYPTO_HMAC
 	key = &k->cur;
 #else
 	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr, k);
@@ -394,6 +392,7 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
  * ubi_crypto_decipher - Decipher the given data
  * @ubi_dev: The targeted UBI device
  * @vhdr: A pointer to the VID header of the targeted LEB
+ * @hmac_hdr: A pointer to the HMAC header of the LEB
  * @src: The source pointer, i.e. the ciphertext
  * @dst: The destination pointer, i.e. the place to store the plaintext
  * @len: The length of the data in @src

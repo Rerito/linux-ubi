@@ -94,6 +94,9 @@ static int self_check_ai(struct ubi_device *ubi, struct ubi_attach_info *ai);
 /* Temporary variables used during scanning */
 static struct ubi_ec_hdr *ech;
 static struct ubi_vid_hdr *vidh;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+static struct ubi_hmac_hdr *hmach;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 /**
  * add_to_list - add physical eraseblock to a list.
@@ -761,12 +764,25 @@ static int check_corruption(struct ubi_device *ubi, struct ubi_vid_hdr *vid_hdr,
 			    int pnum)
 {
 	int err;
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	int size, offs;
+	if (vid_hdr->hmac_hdr_offset) {
+		size = ubi->hmac_leb_size;
+		offs = ubi->hmac_leb_start;
+	} else {
+		size = ubi->leb_size;
+		offs = ubi->leb_start;
+	}
+#endif
 	mutex_lock(&ubi->buf_mutex);
 	memset(ubi->peb_buf, 0x00, ubi->leb_size);
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	err = ubi_io_read(ubi, ubi->peb_buf, pnum, offs,
+			  size);
+#else
 	err = ubi_io_read(ubi, ubi->peb_buf, pnum, ubi->leb_start,
 			  ubi->leb_size);
+#endif
 	if (err == UBI_IO_BITFLIPS || mtd_is_eccerr(err)) {
 		/*
 		 * Bit-flips or integrity errors while reading the data area.
@@ -781,8 +797,11 @@ static int check_corruption(struct ubi_device *ubi, struct ubi_vid_hdr *vid_hdr,
 
 	if (err)
 		goto out_unlock;
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi_check_pattern(ubi->peb_buf, 0xFF, size))
+#else
 	if (ubi_check_pattern(ubi->peb_buf, 0xFF, ubi->leb_size))
+#endif
 		goto out_unlock;
 
 	ubi_err("PEB %d contains corrupted VID header, and the data does not contain all 0xFF",
@@ -1031,6 +1050,12 @@ static int scan_peb(struct ubi_device *ubi, struct ubi_attach_info *ai,
 		}
 	}
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if(vidh->hmac_hdr_offset) {
+		/* The volume contains HMAC header */
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 	if (ec_err)
 		ubi_warn("valid VID header but corrupted EC header at PEB %d",
 			 pnum);
@@ -1240,13 +1265,23 @@ static int scan_all(struct ubi_device *ubi, struct ubi_attach_info *ai,
 	if (!vidh)
 		goto out_ech;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	hmach = ubi_zalloc_hmac_hdr(ubi, GFP_KERNEL);
+	if (!hmach)
+		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 	for (pnum = start; pnum < ubi->peb_count; pnum++) {
 		cond_resched();
 
 		dbg_gen("process PEB %d", pnum);
 		err = scan_peb(ubi, ai, pnum, NULL, NULL);
 		if (err < 0)
-			goto out_vidh;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		goto out_hmach;
+#else
+		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	}
 
 	ubi_msg("scanning is finished");
@@ -1257,7 +1292,11 @@ static int scan_all(struct ubi_device *ubi, struct ubi_attach_info *ai,
 
 	err = late_analysis(ubi, ai);
 	if (err)
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		goto out_hmach;
+#else
 		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 	/*
 	 * In case of unknown erase counter we use the mean erase counter
@@ -1284,13 +1323,21 @@ static int scan_all(struct ubi_device *ubi, struct ubi_attach_info *ai,
 
 	err = self_check_ai(ubi, ai);
 	if (err)
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		goto out_hmach;
+#else
 		goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 	ubi_free_vid_hdr(ubi, vidh);
 	kfree(ech);
 
 	return 0;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+out_hmach:
+	ubi_free_hmac_hdr(ubi, hmach);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 out_vidh:
 	ubi_free_vid_hdr(ubi, vidh);
 out_ech:
