@@ -761,12 +761,25 @@ static int check_corruption(struct ubi_device *ubi, struct ubi_vid_hdr *vid_hdr,
 			    int pnum)
 {
 	int err;
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	int size, offs;
+	if (vid_hdr->hmac_hdr_offset) {
+		size = ubi->hmac_leb_size;
+		offs = ubi->hmac_leb_start;
+	} else {
+		size = ubi->leb_size;
+		offs = ubi->leb_start;
+	}
+#endif
 	mutex_lock(&ubi->buf_mutex);
 	memset(ubi->peb_buf, 0x00, ubi->leb_size);
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	err = ubi_io_read(ubi, ubi->peb_buf, pnum, offs,
+			  size);
+#else
 	err = ubi_io_read(ubi, ubi->peb_buf, pnum, ubi->leb_start,
 			  ubi->leb_size);
+#endif
 	if (err == UBI_IO_BITFLIPS || mtd_is_eccerr(err)) {
 		/*
 		 * Bit-flips or integrity errors while reading the data area.
@@ -781,8 +794,11 @@ static int check_corruption(struct ubi_device *ubi, struct ubi_vid_hdr *vid_hdr,
 
 	if (err)
 		goto out_unlock;
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi_check_pattern(ubi->peb_buf, 0xFF, size))
+#else
 	if (ubi_check_pattern(ubi->peb_buf, 0xFF, ubi->leb_size))
+#endif
 		goto out_unlock;
 
 	ubi_err("PEB %d contains corrupted VID header, and the data does not contain all 0xFF",

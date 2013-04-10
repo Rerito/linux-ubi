@@ -24,10 +24,23 @@ struct ubi_vid_hdr;
 		}\
 	}while(0)
 
+#ifndef CONFIG_UBI_CRYPTO_HMAC
 int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 		void *src, void *dst, size_t len, int offset);
+#else
+int ubi_crypto_cipher(int ubi_dev,
+		struct ubi_vid_hdr *vhdr, struct ubi_hmac_hdr *hmac_hdr,
+		void *src, void *dst, size_t len, int offset);
+#endif
+
+#ifndef CONFIG_UBI_CRYPTO_HMAC
 inline int ubi_crypto_decipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 		void *src, void *dst, size_t len, int offset);
+#else
+int ubi_crypto_decipher(int ubi_dev,
+		struct ubi_vid_hdr *vhdr, struct ubi_hmac_hdr *hmac_hdr,
+		void *src, void *dst, size_t len, int offset);
+#endif
 
 void ubi_crypto_init(void);
 void ubi_crypto_term(void);
