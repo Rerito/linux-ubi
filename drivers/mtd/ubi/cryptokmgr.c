@@ -877,6 +877,15 @@ static void ubi_kmgr_clear_tree(struct ubi_key_tree *tree)
 	up_read(&tree->sem);
 }
 
+/**
+ * ubi_kmgr_get_tree - Get a ubi device key tree
+ * @ubi_dev: the number of the targetted UBI device
+ *
+ * This function simply returns a reference to the
+ * appropriate key tree for the given device.
+ * The result should be put using @ubi_kmgr_put_tree
+ * when it is not used any more by the caller.
+ */
 struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev)
 {
 	if (0 > ubi_dev || UBI_MAX_DEVICES < ubi_dev) {
@@ -885,6 +894,16 @@ struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev)
 	return &ubi_kmgr_ktree[ubi_dev];
 }
 
+/**
+ * ubi_kmgr_put_tree - Put back a ubi key tree
+ * @tree: the tree to put back
+ *
+ * This function releases a reference to the
+ * given tree. This function is useless at the time
+ * but in the future, someone might turn key tree
+ * management from its current static implementation
+ * to a dynamic one and it will then be needed.
+ */
 void ubi_kmgr_put_tree(struct ubi_key_tree *tree)
 {
 	/*
