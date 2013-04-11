@@ -25,7 +25,7 @@
 #include <linux/types.h>
 #include <mtd/ubi-user.h>
 
-/* All voumes/LEBs */
+/* All volumes/LEBs */
 #define UBI_ALL -1
 
 /*
