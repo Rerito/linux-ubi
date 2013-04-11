@@ -327,6 +327,21 @@ int ubi_kval_is_in_tree(struct ubi_kval_tree *tree, u32 x)
 	return ret;
 }
 
+struct ubi_kval_node *ubi_kval_get_rightmost(struct ubi_kval_tree *tree)
+{
+	struct rb_node *n = ERR_PTR(-ENODATA);
+	struct ubi_kval_node *rmost;
+	if (BAD_TPR(tree)) {
+		return -EINVAL;
+	}
+	n = tree->root.rb_node;
+	while (NULL != n) {
+		rmost = rb_entry(n, struct ubi_kval_node, node);
+		n = n->rb_right;
+	}
+	return rmost;
+}
+
 int ubi_kval_init_tree(struct ubi_kval_tree *tree)
 {
 	if (BAD_PTR(tree)) {

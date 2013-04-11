@@ -605,20 +605,11 @@ static long vol_cdev_ioctl(struct file *file, unsigned int cmd,
 		vid = cpu_to_be32(vol->vol_id);
 		if (!req.rm) {
 			err = ubi_kmgr_vol_setkey(tree, vid,
-					req.k, sizeof(req.k),
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-					req.main
-#else
-					1);
-#endif // CONFIG_UBI_CRYPTO_HMAC
+					req.k, sizeof(req.k), req.main, desc);
 		} else {
 			err = ubi_kmgr_vol_setkey(tree, vid,
-					NULL, 0,
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-					req.main
-#else
-					1);
-#endif // CONFIG_UBI_CRYPTO_HMAC
+					NULL, 0, req.main, desc);
+
 		}
 		ubi_kmgr_put_tree(tree);
 		break;
