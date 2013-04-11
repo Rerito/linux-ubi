@@ -24,4 +24,6 @@ struct ubi_kval_node {
 
 int ubi_kval_init_tree(struct ubi_kval_tree *tree);
 
+int ubi_kval_insert(struct ubi_kval_tree *tree, u32 d, u32 u);
+
 
