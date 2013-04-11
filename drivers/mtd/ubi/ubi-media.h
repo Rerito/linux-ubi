@@ -431,7 +431,12 @@ struct ubi_vtbl_record {
 	__be16  name_len;
 	__u8    name[UBI_VOL_NAME_MAX+1];
 	__u8    flags;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	__u8    hmac;
+	__u8    padding[22];
+#else
 	__u8    padding[23];
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	__be32  crc;
 } __packed;
 
