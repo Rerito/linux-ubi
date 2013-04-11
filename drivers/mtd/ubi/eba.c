@@ -382,6 +382,9 @@ int ubi_eba_read_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	int data_size = len, err_cipher = 0;
 	void *crypt = NULL;
+	struct ubi_crypto_cipher_info info = {.offset = offset,
+                                             .ubi_dev = ubi->ubi_num
+                                            };
 #endif // CONFIG_MTD_UBI_CRYPTO
 	uint32_t uninitialized_var(crc);
 
@@ -475,10 +478,13 @@ retry:
 	if (data_size < len) {
 		memset(buf+data_size, 0xFF, len - data_size);
 	}
+	info.pnum = pnum;
+	info.vid_hdr = vid_hdr;
+	info.dst = buf;
+	info.src = crypt;
+	info.len = data_size;
 	err_cipher = ubi_crypto_decipher(
-			ubi->ubi_num, vid_hdr,
-			crypt, buf, data_size, offset
-			);
+			&info);
 	if (0 > err_cipher) {
 
 	}
@@ -556,6 +562,10 @@ static int recover_peb(struct ubi_device *ubi, int pnum, int vol_id, int lnum,
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
 	__be64 old_sqnum, new_sqnum;
+	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+	                                      .offset = offset,
+	                                      .dst = buf
+	                                     };
 #endif
 	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
 	if (!vid_hdr)
@@ -588,8 +598,12 @@ retry:
 	mutex_lock(&ubi->buf_mutex);
 	memset(ubi->peb_buf + offset, 0xFF, len);
 #ifdef CONFIG_MTD_UBI_CRYPTO
-	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
-			buf, ubi->peb_buf+offset, len, offset);
+	info.vid_hdr = vid_hdr;
+	info.len = len;
+	info.src = buf;
+	info.dst = ubi->peb_buf + offset;
+	info.pnum = new_pnum;
+	err = ubi_crypto_cipher(&info);
 	if (err && -ENODATA != err) {
 		goto out_unlock;
 	}
@@ -620,14 +634,20 @@ retry:
 	/* Swap the old and new sqnum */
 	new_sqnum = vid_hdr->sqnum;
 	vid_hdr->sqnum = old_sqnum;
-	err = ubi_crypto_decipher(ubi->ubi_num, vid_hdr,
-			crypt, ubi->peb_buf, offset, 0);
+	info.pnum = pnum;
+	info.offset = 0;
+	info.len = offset;
+	info.src = crypt;
+	info.dst = ubi->peb_buf;
+	err = ubi_crypto_decipher(&info);
 	if (err && -ENODATA != err) {
 		goto out_unlock;
 	}
 	vid_hdr->sqnum = new_sqnum;
-	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
-			crypt, ubi->peb_buf, offset, 0);
+	info.src = ubi->peb_buf;
+	info.pnum = new_pnum;
+
+	err = ubi_crypto_cipher(&info);
 	if (err && -ENODATA != err) {
 		goto out_unlock;
 	}
@@ -707,6 +727,11 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 	struct ubi_vid_hdr *vid_hdr;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
+	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+                                           .offset = offset,
+                                           .src = buf,
+                                           .len = len
+                                          };
 #endif
 	if (ubi->ro_mode)
 		return -EROFS;
@@ -737,9 +762,10 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 			ubi_free_vid_hdr(ubi, vid_hdr);
 			return -ENOMEM;
 		}
-		err = ubi_crypto_cipher(
-				ubi->ubi_num, vid_hdr, buf, crypt, len, offset
-				);
+		info.vid_hdr = vid_hdr;
+		info.dst = crypt;
+		info.pnum = pnum;
+		err = ubi_crypto_cipher(&info);
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		vid_hdr = NULL;
 		err = ubi_io_write_data(ubi, crypt, pnum, offset, len);
@@ -807,8 +833,10 @@ retry:
 			ubi_free_vid_hdr(ubi, vid_hdr);
 			return -ENOMEM;
 		}
-
-		err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr, buf, crypt, len, offset);
+		info.pnum = pnum;
+		info.dst = crypt;
+		info.vid_hdr = vid_hdr;
+		err = ubi_crypto_cipher(&info);
 		if (err) {
 			ubi_free_vid_hdr(ubi, vid_hdr);
 			SAFE_FREE(buf);
@@ -898,6 +926,11 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
 	uint32_t crc;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
+	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+                                           .src = buf,
+                                           .len = len,
+                                           .offset = 0
+                                          };
 #endif
 	if (ubi->ro_mode)
 		return -EROFS;
@@ -928,6 +961,7 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		return -ENOMEM;
 	}
+	info.vid_hdr = vid_hdr;
 #endif // CONFIG_MTD_UBI_CRYPTO
 
 	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
@@ -956,8 +990,9 @@ retry:
 		return pnum;
 	}
 #ifdef CONFIG_MTD_UBI_CRYPTO
-	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
-			buf, crypt, 0, len);
+	info.pnum = pnum;
+	info.dst = crypt;
+	err = ubi_crypto_cipher(&info);
 	if (err) {
 		dbg_eba("Error while ciphering the data : %d", err);
 		leb_write_unlock(ubi, vol_id, lnum);
@@ -1134,6 +1169,11 @@ int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 	uint32_t crc;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
+	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+                                           .len = len,
+	                                       .src = buf,
+	                                       .offset = 0
+	                                      };
 #endif // CONFIG_MTD_UBI_CRYPTO
 	if (ubi->ro_mode)
 		return -EROFS;
@@ -1193,8 +1233,10 @@ retry:
 		err = -ENOMEM;
 		goto out_leb_unlock;
 	}
-	err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
-			buf, crypt, len, 0);
+	info.vid_hdr = vid_hdr;
+	info.dst = crypt;
+	info.pnum = pnum;
+	err = ubi_crypto_cipher(&info);
 	if (err) {
 		goto out_leb_unlock;
 	}
@@ -1310,6 +1352,10 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 	uint32_t crc;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
+	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+                                           .vid_hdr = vid_hdr,
+                                           .offset = 0
+                                          };
 #endif
 	vol_id = be32_to_cpu(vid_hdr->vol_id);
 	lnum = be32_to_cpu(vid_hdr->lnum);
@@ -1428,8 +1474,15 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 			err = MOVE_RETRY;
 			goto out_unlock_buf;
 		}
-		err = ubi_crypto_decipher(ubi->ubi_num, vid_hdr,
-				ubi->peb_buf, crypt, data_size, 0);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+
+#endif
+		info.pnum = from;
+		info.src = ubi->peb_buf;
+		info.dst = crypt;
+		info.len = data_size;
+
+		err = ubi_crypto_decipher(&info);
 		if (err) {
 			err = MOVE_TARGET_WR_ERR;
 			goto out_unlock_buf;
@@ -1439,9 +1492,11 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 
 	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 #ifdef CONFIG_MTD_UBI_CRYPTO
+	info.dst = ubi->peb_buf;
+	info.src = crypt;
+	info.pnum = to;
 	if (data_size > 0) {
-		err = ubi_crypto_cipher(ubi->ubi_num, vid_hdr,
-				crypt, ubi->peb_buf, data_size, 0);
+		err = ubi_crypto_cipher(&info);
 		if (err) {
 			err = MOVE_TARGET_WR_ERR;
 			goto out_unlock_buf;
