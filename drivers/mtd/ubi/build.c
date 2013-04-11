@@ -45,6 +45,7 @@
 #ifdef CONFIG_MTD_UBI_CRYPTO
 #include "crypto.h"
 #endif // CONFIG_MTD_UBI_CRYPTO
+
 /* Maximum length of the 'mtd=' parameter */
 #define MTD_PARAM_LEN_MAX 64
 
