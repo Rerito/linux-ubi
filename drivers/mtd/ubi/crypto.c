@@ -30,6 +30,7 @@
 #include "debug.h"
 #include <linux/scatterlist.h>
 #include <linux/string.h>
+#include <crypto/algapi.h>
 
 #define TRACE_ENTER(fmt, ...) do {\
 	printk(KERN_ALERT "%s - Enter :\n" fmt,__func__, ##__VA_ARGS__);\
@@ -53,7 +54,7 @@ static void ubi_crypto_sg_recover(struct scatterlist *pad_sg, void *buf,
 void ubi_crypto_sg_free_pad(struct scatterlist *sg);
 
 static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
-		struct ubi_key *key, __u8 *iv);
+		int pnum, struct ubi_key *key, __u8 *iv);
 
 static inline void print_iv(u8 *iv, int len);
 static inline void print_key(u8 *k, int len);
@@ -205,18 +206,25 @@ void ubi_crypto_sg_free_pad(struct scatterlist *sg)
  * attached before and after the actual @src data.
  */
 static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
-		struct ubi_key *key, __u8 *iv)
+		int pnum, struct ubi_key *key, __u8 *iv)
 {
 	int err = 0, crypt, to_cpy;
 	struct blkcipher_desc desc;
 	struct scatterlist *sg_in = NULL, *sg_out = NULL;
 	struct ubi_crypto_unit *unit = NULL;
 	unsigned int lpad, n, blk_size = key->key_len;
+	u8 *tweaked_key = NULL;
 	lpad = offset % blk_size;
 	n = lpad + len;
 	if (!len) {
 		return 0;
 	}
+	if (NULL == (tweaked_key = kzalloc(
+			key->key_len, GFP_KERNEL))) {
+		return -ENOMEM;
+	}
+	memcpy(tweaked_key, key->key, key->key_len);
+	crypto_xor(tweaked_key, (u8*)&pnum, sizeof(pnum));
 	to_cpy = ubi_crypto_get_sg(&sg_in, src, len,
 			lpad, blk_size);
 	if (0 > to_cpy) {
@@ -239,7 +247,7 @@ static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
 		desc.tfm = (struct crypto_blkcipher*)unit->aes.tfm;
 		desc.flags = 0;
 		crypto_blkcipher_set_iv(desc.tfm, iv, key->key_len);
-		crypto_blkcipher_setkey(desc.tfm, key->key, key->key_len);
+		crypto_blkcipher_setkey(desc.tfm, tweaked_key, key->key_len);
 		crypt = crypto_blkcipher_encrypt(
 				&desc, sg_out, sg_in, n
 				);
@@ -257,6 +265,7 @@ static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
 		ubi_crypto_sg_free_pad(sg_out);
 		ubi_crypto_sg_free_pad(sg_in);
 	}
+	SAFE_FREE(tweaked_key);
 	SAFE_FREE(sg_in);
 	SAFE_FREE(sg_out);
 	return err;
@@ -277,20 +286,21 @@ static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
  * Thus, the volume ID is related to a particular UBI device, hence this dependency.
  * Then, @vhdr contains information used for the ciphering settings (the sqnum)
  */
-int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
-		void *src, void *dst, size_t len, int offset)
+int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 {
 	int err = 0;
 	struct ubi_key_entry *k = NULL;
 	struct ubi_key *key = NULL;
 	struct ubi_key_tree *tree = NULL;
 	__u8 *iv = NULL;
-
+	if (BAD_PTR(info->vid_hdr)) {
+		return -EINVAL;
+	}
 	TRACE_ENTER("len : %u | vol_id : %u | LEB : %u off : %d | sqnum : %llu\n",
-			len, be32_to_cpu(vhdr->vol_id),
-			be32_to_cpu(vhdr->lnum), offset,
-			be64_to_cpu(vhdr->sqnum));
-	if (0 > ubi_dev || UBI_MAX_DEVICES < ubi_dev) {
+			info->len, be32_to_cpu(info->vid_hdr->vol_id),
+			be32_to_cpu(info->vid_hdr->lnum), info->offset,
+			be64_to_cpu(info->vid_hdr->sqnum));
+	if (0 > info->ubi_dev || UBI_MAX_DEVICES < info->ubi_dev) {
 		err = -EINVAL;
 		goto exit;
 	}
@@ -302,12 +312,12 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 	 * we also have to figure out which key
 	 * has to be used for the current LEB.
 	 */
-	tree = ubi_kmgr_get_tree(ubi_dev);
+	tree = ubi_kmgr_get_tree(info->ubi_dev);
 	if (BAD_PTR(tree)) {
 		err = PTR_ERR(tree);
 		goto exit;
 	}
-	k = ubi_kmgr_get_kentry(tree, vhdr->vol_id);
+	k = ubi_kmgr_get_kentry(tree, info->vid_hdr->vol_id);
 	/*
 	 * FIXME : When HMAC support will be deployed,
 	 * We must add an additional parameter to this function to state
@@ -315,8 +325,8 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 	 */
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
 		printk("%s - No kentry, omitting ciphering.\n", __func__ );
-		if (dst != src) {
-			memcpy(dst, src, len);
+		if (info->dst != info->src) {
+			memcpy(info->dst, info->src, info->len);
 		}
 //		err = -ENODATA;
 		err = 0;
@@ -324,6 +334,13 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 	}
 #ifndef CONFIG_UBI_CRYPTO_HMAC
 	key = &k->cur;
+#else
+	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr, k);
+	if (BAD_PTR(key)) {
+		printk("Cannot proceed ! We do not own the key");
+		err = -EACCES;
+		goto exit;
+	}
 #endif
 	/*
 	 * TODO : Add HMAC checkings
@@ -342,7 +359,8 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 	 * Step 2:
 	 * Set up the IV
 	 */
-	iv = ubi_crypto_compute_iv(vhdr->sqnum, offset, key->key_len);
+	iv = ubi_crypto_compute_iv(info->vid_hdr->sqnum,
+			info->offset, key->key_len);
 	if (unlikely(IS_ERR(iv))) {
 		err = PTR_ERR(iv);
 		goto exit;
@@ -351,15 +369,17 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
 	 * Step 3:
 	 * Do the ciphering
 	 */
-	if (0 > (err = __ubi_crypto_cipher(src, dst, len, offset, key, iv))) {
+	if (0 > (err = __ubi_crypto_cipher(info->src, info->dst,
+			info->len, info->offset,
+			info->pnum, key, iv))) {
 		dbg_crypto("Error while ciphering : %d", err);
 	}
 	exit:
-	if (!BAD_PTR(src) && !BAD_PTR(dst)) {
-		printk("Src (%d) : ", min(len,48));
-		print_iv(src, min(len,48));
-		printk("Dst (%d) : ", min(len,48));
-		print_iv(dst, min(len,48));
+	if (!BAD_PTR(info->src) && !BAD_PTR(info->dst)) {
+		printk("Src (%d) : ", min(info->len,48));
+		print_iv(info->src, min(info->len,48));
+		printk("Dst (%d) : ", min(info->len,48));
+		print_iv(info->dst, min(info->len,48));
 	}
 	ubi_kmgr_put_kentry(k);
 	ubi_kmgr_put_tree(tree);
@@ -383,10 +403,9 @@ int ubi_crypto_cipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
  * is symmetric. It is declared to make the code clearer.
  * Please, use this function when you intend to decipher data.
  */
-inline int ubi_crypto_decipher(int ubi_dev, struct ubi_vid_hdr *vhdr,
-		void *src, void *dst, size_t len, int offset)
+inline int ubi_crypto_decipher(struct ubi_crypto_cipher_info *info)
 {
-	return ubi_crypto_cipher(ubi_dev, vhdr, src, dst, len, offset);
+	return ubi_crypto_cipher(info);
 }
 
 /**
