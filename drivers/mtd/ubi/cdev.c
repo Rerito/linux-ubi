@@ -593,6 +593,7 @@ static long vol_cdev_ioctl(struct file *file, unsigned int cmd,
 	case UBI_IOCSETVOLKEY:
 	{
 		struct ubi_set_vol_key_req req;
+		struct ubi_kmgr_set_vol_key_req in_req;
 		struct ubi_key_tree *tree;
 		__be32 vid;
 		err = copy_from_user(&req, argp,
@@ -603,13 +604,20 @@ static long vol_cdev_ioctl(struct file *file, unsigned int cmd,
 		}
 		tree = ubi_kmgr_get_tree(vol->ubi->ubi_num);
 		vid = cpu_to_be32(vol->vol_id);
+		in_req.vol_id = vid;
+		in_req.vol = vol;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		in_req.tagged = vol->hmac;
+#endif // CONFIG_UBI_CRYPTO_HMAC
+		in_req.main = req.main;
 		if (!req.rm) {
-			err = ubi_kmgr_vol_setkey(tree, vid,
-					req.k, sizeof(req.k), req.main, desc);
+			in_req.key.k = req.k;
+			in_req.key.len = sizeof(req.k);
+			err = ubi_kmgr_setvolkey(tree, &in_req);
 		} else {
-			err = ubi_kmgr_vol_setkey(tree, vid,
-					NULL, 0, req.main, desc);
-
+			memset(&in_req.key, 0, sizeof(in_req.key));
+			in_req.main = 1;
+			err = ubi_kmgr_setvolkey(tree, &in_req);
 		}
 		ubi_kmgr_put_tree(tree);
 		break;

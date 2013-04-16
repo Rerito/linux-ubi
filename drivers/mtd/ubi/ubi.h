@@ -310,6 +310,9 @@ struct ubi_volume {
 	int writers;
 	int exclusive;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	int hmac;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	int reserved_pebs;
 	int vol_type;
 	int usable_leb_size;

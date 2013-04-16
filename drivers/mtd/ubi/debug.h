@@ -24,6 +24,9 @@
 void ubi_dump_flash(struct ubi_device *ubi, int pnum, int offset, int len);
 void ubi_dump_ec_hdr(const struct ubi_ec_hdr *ec_hdr);
 void ubi_dump_vid_hdr(const struct ubi_vid_hdr *vid_hdr);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+void ubi_dump_hmac_hdr(const struct ubi_hmac_hdr *hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 #include <linux/random.h>
 

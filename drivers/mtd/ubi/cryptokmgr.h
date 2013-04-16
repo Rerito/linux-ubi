@@ -75,6 +75,11 @@ struct ubi_key {
 #endif // CONFIG_UBI_CRYPTO_HMAC
 };
 
+struct ubi_key_value {
+	__u8 *k;
+	size_t len;
+};
+
 /**
  * struct ubi_key_entry - Ciphered volume key entry
  * @node: Embedded rb_node structure to build the tree
@@ -114,15 +119,19 @@ struct ubi_key_entry {
 #endif // CONFIG_UBI_CRYPTO_HMAC
 };
 
+struct ubi_kmgr_set_vol_key_req {
+	__be32 vol_id;
+	void *vol;
+	u8 tagged;
+	struct ubi_key_value key;
+	u8 main;
+};
+
 extern struct ubi_key_tree ubi_kmgr_ktree[UBI_MAX_DEVICES];
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 typedef int (*ubi_kmgr_key_lu_func)(struct ubi_key*,
 		void*);
-struct ubi_key_value {
-	__u8 *k;
-	size_t len;
-};
 
 /*
  * Look up functions
@@ -138,9 +147,8 @@ struct ubi_key_entry *ubi_kmgr_get_kentry(struct ubi_key_tree *tree,
 		__be32 vol_id);
 void ubi_kmgr_put_kentry(struct ubi_key_entry *kentry);
 
-int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
-		__be32 vol_id, __u8 *k, unsigned int len,
-		__u8 main, void *vol);
+int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
+		struct ubi_kmgr_set_vol_key_req *req);
 void ubi_kmgr_ack_update(struct ubi_key_entry *kentry);
 
 struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev);

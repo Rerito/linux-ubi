@@ -354,9 +354,12 @@ struct ubi_key *ubi_kmgr_get_mainkey(struct ubi_key_entry *kentry)
 	down_read(&kentry->kr_sem);
 	if (!BAD_PTR(kentry->main)) {
 		ubi_kmgr_get_key(kentry->main);
+		k = kentry->main;
+	} else {
+		k = ERR_PTR(-ENODATA);
 	}
 	up_read(&kentry->kr_sem);
-	return kentry->main;
+	return k;
 #else
 	return &kentry->cur;
 #endif // CONFIG_UBI_CRYPTO_HMAC
@@ -384,7 +387,7 @@ static inline struct ubi_key *ubi_kmgr_get_key(struct ubi_key *k)
 	return ubi_kmgr_upd_key_refc(k, 1);
 }
 
-static inline struct ubi_key *ubi_kmgr_put_key(struct ub_key *k)
+static inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k)
 {
 	return ubi_kmgr_upd_key_refc(k, 0);
 }
@@ -442,7 +445,6 @@ struct ubi_key *ubi_kmgr_key_lookup(struct ubi_key_entry *kentry,
 		ubi_kmgr_key_lu_func lookup, void *private)
 {
 	struct ubi_key *k = NULL;
-	int i, ok = 0;
 	if (BAD_PTR(kentry)) {
 		return ERR_PTR(-EINVAL);
 	}
@@ -473,6 +475,16 @@ static int ubi_kmgr_value_lookup(struct ubi_key *k, void *private)
 	return 1;
 }
 
+/**
+ * ubi_kmgr_key_lu_by_value - Find a key given its value
+ * @kentry: the key entry holding the ring
+ * @raw_key: a pointer to the raw key value (bit string)
+ * @len: the length of @raw_key in bytes
+ *
+ * This function simply returns the ubi_key object corresponding
+ * to the given @raw_key key value. If there is no such key registered
+ * in the ring, the function returns %ENODATA.
+ */
 struct ubi_key *ubi_kmgr_key_lu_by_value(struct ubi_key_entry *kentry,
 		__u8 *raw_key, size_t len)
 {
@@ -602,7 +614,7 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	__u8 hmac_tag[16];
 	list_for_each_entry(key, &kentry->key_ring, entry) {
 		compute_hmac_tag(&hmac_tag);
-		if (!strcmp(hmac_tag, hmac_hdr->htag, 16)) {
+		if (!memcmp(hmac_tag, hmac_hdr->htag, 16)) {
 			ubi_kmgr_get_key(key);
 			ubi_kval_insert(&key->val_tree, lnum, lnum);
 			ubi_kval_remove(&kentry->unknown, lnum, lnum);
@@ -655,17 +667,20 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 }
 
 /**
- * ubi_kmgr_vol_setkey - (Un)set the key for a given UBI volume
+ * ubi_kmgr_setvolkey - (Un)set the key for a given UBI volume
  * @tree: The key tree that will hold the key
+ * @req: A pointer to the information structure
+ *
+ * The @req structure contains several fields:
  * @vol_id: The volume ID
- * @k: A pointer to the key value
- * @len: The length of the key
- * @main: Set to %0 if auxiliary key
  *        (used only if %CONFIG_UBI_CRYPTO_HMAC)
  * @vol: A pointer to the volume descriptor of
  *        the UBI device. Used by the update worker
  *        to recover the UBI data structures.
  *        (only with %CONFIG_UBI_CRYPTO_HMAC enabled)
+ * @tagged: Is the volume tagged with HMAC headers ?
+ * @key: The pair (key, key length)
+ * @main: Set to %0 if auxiliary key
  *
  * This function will set up the key according to the parameters.
  * If no kentry is found for @vol_id in @tree, then a new one is allocated
@@ -703,19 +718,34 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
  *              the current call is currently being used.
  *              (either by an update work : @upd != 0,
  *               or by external user @in_use > 0)
+ *
+ * %EPERM     : The volume does not support HMAC headers but
+ *              the user supplies an auxiliary key.
+ *              Since no key checking can be performed,
+ *              storing an auxiliary becomes pointless and
+ *              @ubi_kmgr_setvolkey will automatically abort
+ *              the execution and return this error.
  */
-int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
-		__be32 vol_id, __u8 *k, unsigned int len,
-		__u8 main, void *vol)
+int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
+		struct ubi_kmgr_set_vol_key_req *req)
 {
 	struct ubi_key_entry *kentry = NULL;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
+	__be32 vol_id;
+	__u8 main;
+	__u8 *k;
+	size_t len;
+	void *vol;
 	struct ubi_key *key = NULL;
-#endif
 	int err = 0;
+	k = req->key.k;
 	if (unlikely(BAD_PTR(tree) || IS_ERR(k))) {
 		return -EINVAL;
 	}
+
+	vol_id = req->vol_id;
+	vol = req->vol;
+	len = req->key.len;
+	main = req->main;
 
 	kentry = ubi_kmgr_get_kentry(tree, vol_id);
 	if (NULL == kentry) {
@@ -728,7 +758,21 @@ int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
 		}
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 		kentry->vol = vol;
-#endif
+		kentry->tagged = req->tagged;
+		if (!req->tagged && !main) {
+			/*
+			 * If the volume is not tag and
+			 * the key is an auxiliary key, since this volume
+			 * does not support HMAC headers, we cannot establish
+			 * key integrity and thus, we act like in the raw version.
+			 *
+			 * Hence there is no need to store any auxiliary key
+			 * we return %EPERM to signal that this is pointless
+			 */
+			ubi_kmgr_free_kentry(kentry);
+			return -EPERM;
+		}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		down_write(&tree->sem);
 		err = ubi_kmgr_insert_kentry(tree, kentry);
 		if (err) {
@@ -754,61 +798,86 @@ int ubi_kmgr_vol_setkey(struct ubi_key_tree *tree,
 			 * Error : Not valid volume descriptor.
 			 */
 		}
-		key = ubi_kmgr_key_lu_by_value(kentry, k, len);
-		if (BAD_PTR(key)) {
-			/* We must allocate a new key */
-			key = ubi_kmgr_alloc_key(k, len);
+		if (req->tagged) {
+			key = ubi_kmgr_key_lu_by_value(kentry, k, len);
 			if (BAD_PTR(key)) {
-				mutex_unlock(&kentry->mutex);
-				return PTR_ERR(key);
-			}
+				/* We must allocate a new key */
+				key = ubi_kmgr_alloc_key(k, len);
+				if (BAD_PTR(key)) {
+					mutex_unlock(&kentry->mutex);
+					ubi_kmgr_put_kentry(kentry);
+					return PTR_ERR(key);
+				}
 
-			down_write(&kentry->kr_sem);
-			list_add(&key->entry, &kentry->key_ring);
-			up_write(&kentry->kr_sem);
+				down_write(&kentry->kr_sem);
+				list_add(&key->entry, &kentry->key_ring);
+				up_write(&kentry->kr_sem);
 
-			if (main) {
-				/*
-				 * TODO : trigger/reset update worker
-				 */
+				if (main) {
+					/*
+					 * TODO : trigger/reset update worker
+					 */
+				}
+			} else {
+				if (main && (key != kentry->main)) {
+					/* TODO :
+					 * Update main status for the key
+					 * trigger/reset update worker
+					 */
+				} else if (!main && (key == kentry->main)) {
+					/*
+					 * TODO : trigger/reset update worker
+					 */
+				}
+				/* Else, nothing to do */
 			}
 		} else {
-			if (main && (key != kentry->main)) {
-				/* TODO :
-				 * Update main status for the key
-				 * trigger/reset update worker
-				 */
-			} else if (!main && (key == kentry->main)) {
+			if (main) {
 				/*
-				 * TODO : trigger/reset update worker
+				 * We must replace the current key
+				 * Since there is no HMAC tagging, we remove
+				 * the key without any further checking.
+				 *
+				 * We act just like if %CONFIG_UBI_CRYPTO_HMAC
+				 * was undefined.
+				 *
+				 * In this case, we can shortcut the usual path
+				 * since there will be only one key in the ring
+				 * -> kentry->main will always point to that key
 				 */
-			}
-			/* Else, nothing to do */
-			mutex_unlock(&kentry->mutex);
-		}
+				key = kentry->main;
 #else
+		key = &kentry->cur;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		if ((1 < kentry->in_use)) {
 			err = -EBUSY;
 		} else {
 			if (NULL == k || 0 == len) {
 				/* We want to unset the current key. */
-				memset(&kentry->cur, 0, sizeof(kentry->cur));
+				memset(key, 0, sizeof(*key));
 			}
 			else {
-				if (NULL == (kentry->cur.key = kmalloc(len, GFP_KERNEL))) {
+				if (NULL ==
+					(key->key = kmalloc(
+							len, GFP_KERNEL))) {
 					mutex_unlock(&kentry->mutex);
 					ubi_kmgr_put_kentry(kentry);
 					ubi_kmgr_remove_kentry(tree, kentry);
 					return -ENOMEM;
 				} else {
-					memcpy(kentry->cur.key, k, len);
-					kentry->cur.key_len = len;
+					memcpy(key->key, k, len);
+					key->key_len = len;
 				}
 			}
 		}
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+
+			}
+			/* Else we have nothing to do */
+		}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		mutex_unlock(&kentry->mutex);
 		ubi_kmgr_put_kentry(kentry);
-#endif
 	}
 
 	return err;

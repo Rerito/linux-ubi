@@ -277,6 +277,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	vol->alignment = req->alignment;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	vol->data_pad  = ubi->hmac_leb_size % vol->alignment;
+	vol->hmac = 1;
 #else
 	vol->data_pad  = ubi->leb_size % vol->alignment;
 #endif // CONFIG_UBI_CRYPTO_HMAC

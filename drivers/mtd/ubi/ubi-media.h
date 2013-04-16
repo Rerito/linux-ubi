@@ -122,6 +122,7 @@ enum {
 #define UBI_VID_HDR_SIZE sizeof(struct ubi_vid_hdr)
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 #define UBI_HMAC_HDR_SIZE sizeof(struct ubi_hmac_hdr)
+#define UBI_HMAC_HDR_SIZE_CRC (UBI_HMAC_HDR_SIZE - sizeof(__be32))
 #endif
 /* Sizes of UBI headers without the ending CRC */
 #define UBI_EC_HDR_SIZE_CRC  (UBI_EC_HDR_SIZE  - sizeof(__be32))
@@ -307,13 +308,14 @@ struct ubi_vid_hdr {
 
 /**
  * struct ubi_hmac_hdr - on-flash HMAC tags header for a LEB.
+ * @magic: the HMAC header magic number (ASCII for "UBIC")
  * @htag: the HMAC tag specific to the LEB
- * @htag_crc: the checksum of @htag
  * @top_hmac: the HMAC tag for the first half of the LEB
- * @top_crc: the checksum of @top_hmac
  * @btm_hmac: the HMAC tag for the second half of the LEB
- * @btm_crc: the checksum of @btm_hmac
+ * @data_len: the length of the data currently involved in the
+ *            HMAC tags calculation
  * @padding1: padding bytes for 64 bytes alignment
+ * @crc     : the checksum of the header
  *
  * The @htag value will always be computed when the HMAC is enabled.
  * It is computed using various figures specific to the LEB at a given time.
@@ -325,7 +327,6 @@ struct ubi_vid_hdr {
  *  - sqnum is the sqnum assigned to the LEB VID header at the time
  *  - PEB is the number of the PEB mapped to the LEB
  *
- * The CRC32 of @htag is then appendend to prevent data corruption.
  *
  * Then, the @top_hmac and @btm_hmac fields are computed in the pattern :
  *     HMAC(VID|LEB|sqnum|PEB|HALF, K)
@@ -347,11 +348,11 @@ struct ubi_vid_hdr {
 struct ubi_hmac_hdr {
 	__be32  magic;
 	__u8    htag[16];
-	__be32  htag_crc;
 	__u8    top_hmac[16];
-	__be32  top_crc;
 	__u8    btm_hmac[16];
-	__be32  btm_crc;
+	__be32  data_len;
+	__u8    padding1[4];
+	__be32  crc;
 } __packed;
 
 /* Internal UBI volumes count */

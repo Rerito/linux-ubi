@@ -566,9 +566,11 @@ static int init_volumes(struct ubi_device *ubi,
 					UBI_DYNAMIC_VOLUME : UBI_STATIC_VOLUME;
 		vol->name_len = be16_to_cpu(vtbl[i].name_len);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-		if (vtbl[i].hmac)
+		if (vtbl[i].hmac) {
 			vol->usable_leb_size = ubi->hmac_leb_size -
 								   vol->data_pad;
+			vol->hmac = 1;
+		}
 		else
 			vol->usable_leb_size = ubi->leb_size - vol->data_pad;
 #else

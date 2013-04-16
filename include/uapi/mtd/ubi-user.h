@@ -284,6 +284,7 @@ struct ubi_attach_req {
  * @vol_type: volume type (%UBI_DYNAMIC_VOLUME or %UBI_STATIC_VOLUME)
  * @padding1: reserved for future, not used, has to be zeroed
  * @name_len: volume name length
+ * @tagged: non zero if the volume has to be HMAC tagged
  * @padding2: reserved for future, not used, has to be zeroed
  * @name: volume name
  *
@@ -313,7 +314,8 @@ struct ubi_mkvol_req {
 	__s8 vol_type;
 	__s8 padding1;
 	__s16 name_len;
-	__s8 padding2[4];
+	__s8 tagged;
+	__s8 padding2[3];
 	char name[UBI_MAX_VOLUME_NAME + 1];
 } __packed;
 

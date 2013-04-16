@@ -32,15 +32,6 @@
 #include <linux/string.h>
 #include <crypto/algapi.h>
 
-#define TRACE_ENTER(fmt, ...) do {\
-	printk(KERN_ALERT "%s - Enter :\n" fmt,__func__, ##__VA_ARGS__);\
-	} while (0)
-
-#define TRACE_EXIT(fmt, ...) do {\
-	printk(KERN_ALERT "%s - Exit :\n" fmt,__func__, ##__VA_ARGS__);\
-	} while (0)
-
-
 static inline __u8 *ubi_crypto_compute_iv(__be64 sqnum, int offset, int klen);
 
 static int ubi_crypto_get_sg(struct scatterlist **sg,

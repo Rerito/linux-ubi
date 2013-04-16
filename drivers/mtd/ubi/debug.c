@@ -100,6 +100,30 @@ void ubi_dump_vid_hdr(const struct ubi_vid_hdr *vid_hdr)
 		       vid_hdr, UBI_VID_HDR_SIZE, 1);
 }
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+void ubi_dump_hmac_hdr(const struct ubi_hmac_hdr *hmac_hdr)
+{
+	pr_err("HMAC header dump:\n");
+	pr_err("\tmagic      %08x\n", be32_to_cpu(hmac_hdr->magic));
+	pr_err("\thtag\n"
+			"\t==========\n");
+	print_hex_dump_bytes("\t", DUMP_PREFIX_NONE,
+			hmac_hdr->htag, sizeof(hmac_hdr->htag));
+	pr_err("\tdata_len   %d\n", be32_to_cpu(hmac_hdr->data_len));
+	pr_err("\ttop_hmac\n"
+			"\t==========\n");
+	print_hex_dump_bytes("\t", DUMP_PREFIX_NONE,
+			hmac_hdr->top_hmac,
+			sizeof(hmac_hdr->top_hmac));
+	pr_err("\tbtm_hmac\n"
+			"\t==========\n");
+	print_hex_dump_bytes("\t", DUMP_PREFIX_NONE,
+			hmac_hdr->btm_hmac,
+			sizeof(hmac_hdr->btm_hmac));
+	pr_err("\tcrc        %08x\n", be32_to_cpu(hmac_hdr->crc));
+}
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 /**
  * ubi_dump_vol_info - dump volume information.
  * @vol: UBI volume description object
