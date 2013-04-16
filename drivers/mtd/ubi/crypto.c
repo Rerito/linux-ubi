@@ -54,29 +54,6 @@ void ubi_crypto_sg_free_pad(struct scatterlist *sg);
 static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
 		int pnum, struct ubi_key *key, __u8 *iv);
 
-static inline void print_iv(u8 *iv, int len);
-static inline void print_key(u8 *k, int len);
-
-static inline void print_iv(u8 *iv, int len)
-{
-	int i;
-	printk("IV : ");
-	for (i = 0; i < len; i++) {
-		printk("%#.2x - ", iv[i]);
-	}
-	printk("\n");
-}
-
-static inline void print_key(u8 *k, int len)
-{
-	int i;
-	printk("Key : ");
-	for (i = 0; i < len; i++) {
-		printk("%#02x - ", k[i]);
-	}
-	printk("\n");
-}
-
 
 /**
  * ubi_crypto_compute_iv - Compute the IV for a R/W operation
@@ -95,7 +72,6 @@ static inline __u8 *ubi_crypto_compute_iv(__be64 sqnum, int offset, int klen)
 	if (NULL == (iv = kzalloc(klen, GFP_KERNEL))) {
 		return ERR_PTR(-ENOMEM);
 	}
-	printk("ctr_blk is %llu => ctr is %#llx\n", ctr_blk, ctr);
 	p = iv + klen - sizeof(ctr);
 	memcpy(p, &ctr, sizeof(ctr));
 	p = p - sizeof(nonce);
@@ -113,7 +89,7 @@ static int ubi_crypto_get_sg(struct scatterlist **sg,
 	unsigned long shift = 0, offs = 0, to_cpy = 0;
 	struct scatterlist *tmp;
 	int vmalloced = IS_VMALLOC(ptr);
-	int err = 0, i;
+	int err = 0;
 	void *pad = NULL;
 	struct page *page = NULL;
 
@@ -140,11 +116,6 @@ static int ubi_crypto_get_sg(struct scatterlist **sg,
 		err = to_cpy;
 		len -= to_cpy;
 		ptr += to_cpy;
-		printk("%s - Pad : ", __func__);
-		for(i = 0; i < blk_size; i++) {
-			printk("%#.2x - ", *((char*)pad+i));
-		}
-		printk("\n");
 	} else {
 		to_cpy = 0;
 	}
@@ -171,13 +142,7 @@ static void ubi_crypto_sg_recover(struct scatterlist *pad_sg, void *buf,
 		unsigned int len, unsigned int blk_size, unsigned int lpad)
 {
 	void *pad = sg_virt(pad_sg);
-	int i;
 	if (NULL != pad) {
-		printk("%s - Beginning recovery\n", __func__);
-		for (i=0; i < 16; i++) {
-			printk("%#.2x - ", *((char*)pad+i));
-		}
-		printk("\n");
 		memcpy(buf, pad + lpad, len);
 	}
 }
@@ -226,19 +191,15 @@ static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
 	to_cpy = ubi_crypto_get_sg(&sg_in, src, len,
 			lpad, blk_size);
 	if (0 > to_cpy) {
-		printk("An error occured setting input sg.\n");
 		err = to_cpy;
 		goto exit;
 	}
 	to_cpy = ubi_crypto_get_sg(&sg_out, dst, len,
 			lpad, blk_size);
 	if (0 > to_cpy) {
-		printk("An error occured setting output sg.\n");
 		err = to_cpy;
 		goto exit;
 	}
-	print_key(key->key,
-	blk_size);
 	unit = ubi_cru_acquire_unit(&ubi_cru_upool);
 	if (!BAD_PTR(unit)) {
 		mutex_lock(&unit->aes.mutex);
@@ -295,7 +256,7 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	if (BAD_PTR(info->vid_hdr)) {
 		return -EINVAL;
 	}
-	TRACE_ENTER("len : %u | vol_id : %u | LEB : %u off : %d | sqnum : %llu\n",
+	dbg_crypto("len : %u | vol_id : %u | LEB : %u off : %d | sqnum : %llu\n",
 			info->len, be32_to_cpu(info->vid_hdr->vol_id),
 			be32_to_cpu(info->vid_hdr->lnum), info->offset,
 			be64_to_cpu(info->vid_hdr->sqnum));
@@ -323,11 +284,9 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	 */
 #ifndef UBI_CRYPTO_HMAC
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
-		printk("%s - No kentry, omitting ciphering.\n", __func__ );
 		if (info->dst != info->src) {
 			memcpy(info->dst, info->src, info->len);
 		}
-//		err = -ENODATA;
 		err = 0;
 		goto exit;
 	}
@@ -335,7 +294,7 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 #else
 	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr, k);
 	if (BAD_PTR(key)) {
-		printk("Cannot proceed ! We do not own the key");
+		dbg_crypto("Cannot proceed ! We do not own the key");
 		err = -EACCES;
 		goto exit;
 	}
@@ -373,18 +332,11 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 		dbg_crypto("Error while ciphering : %d", err);
 	}
 	exit:
-	if (!BAD_PTR(info->src) && !BAD_PTR(info->dst)) {
-		printk("Src (%d) : ", min(info->len,48));
-		print_iv(info->src, min(info->len,48));
-		printk("Dst (%d) : ", min(info->len,48));
-		print_iv(info->dst, min(info->len,48));
-	}
 	ubi_kmgr_put_kentry(k);
 	ubi_kmgr_put_tree(tree);
 	if (likely(!IS_ERR(iv))) {
 		kfree(iv);
 	}
-	TRACE_EXIT("Result : %d\n\n\n\n", err);
 	return err;
 }
 
