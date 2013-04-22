@@ -743,7 +743,7 @@ static int io_init(struct ubi_device *ubi, int max_beb_per1024)
 					ubi->hmac_hdr_aloffset;
 	ubi->hmac_leb_start = ubi->hmac_hdr_offset + UBI_HMAC_HDR_SIZE;
 	ubi->hmac_leb_start = ALIGN(ubi->leb_start, ubi->min_io_size);
-	ubi->hmac_leb_size = ubi->peb_size - ubi->hmac_leb_size;
+	ubi->hmac_leb_size = ubi->peb_size - ubi->hmac_leb_start;
 #endif
 	ubi->leb_start = ubi->vid_hdr_offset + UBI_VID_HDR_SIZE;
 	ubi->leb_start = ALIGN(ubi->leb_start, ubi->min_io_size);

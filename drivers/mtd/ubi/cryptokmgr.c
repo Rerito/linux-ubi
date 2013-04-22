@@ -24,6 +24,7 @@
  */
 
 #include "cryptokmgr.h"
+#include "crypto.h"
 #include <linux/delay.h>
 
 #define BAD_PTR(ptr) ((NULL == (ptr)) || (IS_ERR((ptr))))
@@ -50,6 +51,9 @@ static inline struct ubi_key *ubi_kmgr_get_key(struct ubi_key *k);
 static inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k);
 static void ubi_kmgr_free_key(struct ubi_key *key);
 static void ubi_kmgr_free_keyring(struct list_head *head);
+static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
+		struct ubi_vid_hdr *vid_hdr, int pnum,
+		struct ubi_key_entry *kentry);
 #endif // CONFIG_UBI_CRYPTO_HMAC
 static int ubi_kmgr_free_kentry(struct ubi_key_entry *kentry);
 
@@ -607,27 +611,61 @@ static int ubi_kmgr_remove_kentry(struct ubi_key_tree *tree,
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
-		struct ubi_vid_hdr *vid_hdr, struct ubi_key_entry *kentry)
+		struct ubi_vid_hdr *vid_hdr, int pnum,
+		struct ubi_key_entry *kentry)
 {
 	struct ubi_key *key = NULL;
 	u32 lnum = be32_to_cpu(vid_hdr->lnum);
-	__u8 hmac_tag[16];
+	__u8 *hmac_tag = NULL;
+	__be32 be_pnum = cpu_to_be32(pnum);
+	struct ubi_crypto_unit *u = NULL;
+	int err = -ENODATA;
+	unsigned int comp_len = 0;
+	u = ubi_cru_acquire_unit(&ubi_cru_upool);
+	mutex_lock(&u->hmac.mutex);
+	comp_len = crypto_hash_digestsize((struct crypto_hash*)u->hmac.tfm);
+	comp_len = min(comp_len, sizeof(hmac_hdr->htag));
+	if (BAD_PTR(u)) {
+		err = PTR_ERR(u);
+		goto exit;
+	}
+
 	list_for_each_entry(key, &kentry->key_ring, entry) {
-		compute_hmac_tag(&hmac_tag);
-		if (!memcmp(hmac_tag, hmac_hdr->htag, 16)) {
+		hmac_tag = ubi_crypto_compute_hash(u, key, vid_hdr,
+				be_pnum, NULL, 0);
+		if (IS_ERR(hmac_tag)) {
+			err = PTR_ERR(hmac_tag);
+			break;
+		}
+		if (!memcmp(hmac_tag, hmac_hdr->htag, comp_len)) {
 			ubi_kmgr_get_key(key);
 			ubi_kval_insert(&key->val_tree, lnum, lnum);
 			ubi_kval_remove(&kentry->unknown, lnum, lnum);
-			return key;
+			err = 0;
+			break;
 		}
+		kfree(hmac_tag);
+		hmac_tag = NULL;
 	}
+
+	exit:
+	if (!BAD_PTR(u))
+		ubi_cru_put_unit(u, &ubi_cru_upool);
+
+	if (!BAD_PTR(hmac_tag))
+		kfree(hmac_tag);
+
+	if (err)
+		return ERR_PTR(err);
+
 	return ERR_PTR(-ENODATA);
 }
 
 #endif // CONFIG_UBI_CRYPTO_HMAC
 
 struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
-		struct ubi_vid_hdr *vid_hdr, struct ubi_key_entry *kentry)
+		struct ubi_vid_hdr *vid_hdr, int pnum,
+		struct ubi_key_entry *kentry)
 {
 	u32 lnum;
 	struct ubi_key *key = NULL;
@@ -652,7 +690,7 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 //			ubi_kval_set_sane(&kentry->unknown, 1);
 			kentry->unknown.dying = 0;
 		}
-		key = ubi_kmgr_probe_leb_key(hmac_hdr, vid_hdr, kentry);
+		key = ubi_kmgr_probe_leb_key(hmac_hdr, vid_hdr, pnum, kentry);
 		if (BAD_PTR(key)) {
 			ubi_kval_insert(&kentry->unknown, lnum, lnum);
 		}

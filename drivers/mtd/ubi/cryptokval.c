@@ -330,9 +330,9 @@ int ubi_kval_is_in_tree(struct ubi_kval_tree *tree, u32 x)
 struct ubi_kval_node *ubi_kval_get_rightmost(struct ubi_kval_tree *tree)
 {
 	struct rb_node *n = ERR_PTR(-ENODATA);
-	struct ubi_kval_node *rmost;
-	if (BAD_TPR(tree)) {
-		return -EINVAL;
+	struct ubi_kval_node *rmost = NULL;
+	if (BAD_PTR(tree)) {
+		return ERR_PTR(-EINVAL);
 	}
 	n = tree->root.rb_node;
 	while (NULL != n) {

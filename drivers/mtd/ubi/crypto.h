@@ -7,9 +7,13 @@
 #include "cryptokmgr.h"
 #include <linux/mm.h>
 #include <asm-generic/pgtable.h>
+#include <linux/scatterlist.h>
 
 struct ubi_vid_hdr;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+#define UBI_HMAC_PREFIX_LEN 20
+#endif
 
 /**
  * struct ubi_crypto_cipher_info - Ciphering information
@@ -51,6 +55,12 @@ struct ubi_crypto_cipher_info {
 
 int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info);
 inline int ubi_crypto_decipher(struct ubi_crypto_cipher_info *info);
+
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+u8 *ubi_crypto_compute_hash(struct ubi_crypto_unit *unit,
+		struct ubi_key *key, struct ubi_vid_hdr *vid_hdr, __be32 pnum,
+		u8 *data, unsigned int len);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 void ubi_crypto_init(void);
 void ubi_crypto_term(void);

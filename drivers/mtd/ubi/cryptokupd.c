@@ -92,6 +92,7 @@ void ubi_kmgr_upd(void *p_kentry)
 							"(err = %d)\n"
 							"Possible memory corruption,"
 							"aborting update\n", err);
+					mutex_unlock(&kentry->mutex);
 					ubi_kmgr_put_key(main);
 					break;
 				} else {

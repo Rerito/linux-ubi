@@ -397,7 +397,11 @@ int ubi_compare_lebs(struct ubi_device *ubi, const struct ubi_ainf_peb *aeb,
 	len = be32_to_cpu(vid_hdr->data_size);
 
 	mutex_lock(&ubi->buf_mutex);
-	err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, len);
+	err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, len
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+			, vid_hdr->hmac_hdr_offset
+#endif
+			);
 	if (err && err != UBI_IO_BITFLIPS && !mtd_is_eccerr(err))
 		goto out_unlock;
 
@@ -803,7 +807,6 @@ static int check_corruption(struct ubi_device *ubi, struct ubi_vid_hdr *vid_hdr,
 	if (ubi_check_pattern(ubi->peb_buf, 0xFF, ubi->leb_size))
 #endif
 		goto out_unlock;
-
 	ubi_err("PEB %d contains corrupted VID header, and the data does not contain all 0xFF",
 		pnum);
 	ubi_err("this may be a non-UBI PEB or a severe VID header corruption which requires manual inspection");
@@ -1372,6 +1375,12 @@ static int scan_fast(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	if (!vidh)
 		goto out_ech;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	hmach = ubi_zalloc_hmac_hdr(ubi, GFP_KERNEL);
+	if (!hmach)
+		goto out_hmach;
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 	for (pnum = 0; pnum < UBI_FM_MAX_START; pnum++) {
 		int vol_id = -1;
 		unsigned long long sqnum = -1;
@@ -1380,14 +1389,20 @@ static int scan_fast(struct ubi_device *ubi, struct ubi_attach_info *ai)
 		dbg_gen("process PEB %d", pnum);
 		err = scan_peb(ubi, ai, pnum, &vol_id, &sqnum);
 		if (err < 0)
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+			goto out_hmach;
+#else
 			goto out_vidh;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 		if (vol_id == UBI_FM_SB_VOLUME_ID && sqnum > max_sqnum) {
 			max_sqnum = sqnum;
 			fm_anchor = pnum;
 		}
 	}
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	ubi_free_hmac_hdr(ubi, hmach);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	ubi_free_vid_hdr(ubi, vidh);
 	kfree(ech);
 
@@ -1395,7 +1410,10 @@ static int scan_fast(struct ubi_device *ubi, struct ubi_attach_info *ai)
 		return UBI_NO_FASTMAP;
 
 	return ubi_scan_fastmap(ubi, ai, fm_anchor);
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+out_hmach:
+	ubi_free_hmac_hdr(ubi, hmach);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 out_vidh:
 	ubi_free_vid_hdr(ubi, vidh);
 out_ech:

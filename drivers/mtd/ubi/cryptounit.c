@@ -186,7 +186,7 @@ static struct ubi_crypto_unit *ubi_cru_get_unit(struct ubi_crypto_unit_pool *poo
  * The returned unit must then be released with @ubi_cru_put_unit
  * Possible errors :
  * %EPERM : The pool is "disposed" and no unit can be acquired
- * %EIVAL : Bad pointer
+ * %EINVAL : Bad pointer
  */
 struct ubi_crypto_unit *ubi_cru_acquire_unit(
 		struct ubi_crypto_unit_pool * const pool)

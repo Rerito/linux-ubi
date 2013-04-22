@@ -342,7 +342,12 @@ retry:
 		goto write_error;
 
 	/* Write the layout volume contents */
-	err = ubi_io_write_data(ubi, vtbl, new_aeb->pnum, 0, ubi->vtbl_size);
+	/* The layout volume is never encrypted ! */
+	err = ubi_io_write_data(ubi, vtbl, new_aeb->pnum, 0, ubi->vtbl_size
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		   , 0
+#endif
+		   );
 	if (err)
 		goto write_error;
 
@@ -427,7 +432,11 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi,
 		}
 
 		err = ubi_io_read_data(ubi, leb[aeb->lnum], aeb->pnum, 0,
-				       ubi->vtbl_size);
+				       ubi->vtbl_size
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+				       , 0
+#endif
+				       );
 		if (err == UBI_IO_BITFLIPS || mtd_is_eccerr(err))
 			/*
 			 * Scrub the PEB later. Note, -EBADMSG indicates an

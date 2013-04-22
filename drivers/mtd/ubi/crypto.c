@@ -32,6 +32,10 @@
 #include <linux/string.h>
 #include <crypto/algapi.h>
 
+/* Alignment macro for HMAC */
+#define UPDIV(a,b) ((a) + (b) - 1)/(b)
+#define ALIGN_UP(a,b) (UPDIV(a,b))*(b)
+
 static inline __u8 *ubi_crypto_compute_iv(__be64 sqnum, int offset, int klen);
 
 static int ubi_crypto_get_sg(struct scatterlist **sg,
@@ -41,10 +45,157 @@ static int ubi_crypto_get_sg(struct scatterlist **sg,
 static void ubi_crypto_sg_recover(struct scatterlist *pad_sg, void *buf,
 		unsigned int len, unsigned int blk_size, unsigned int lpad);
 void ubi_crypto_sg_free_pad(struct scatterlist *sg);
+static void fill_sg(struct scatterlist *sg, u8 *data, unsigned int len);
 
 static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
 		int pnum, struct ubi_key *key, __u8 *iv);
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+static void compute_hmac_prefix(u8 *prefix,
+		struct ubi_vid_hdr *vid_hdr, __be32 len);
+static int compute_hmac_key(u8 *hmac_key, unsigned int ksize,
+		struct ubi_key *k, __be32 pnum);
+
+static void compute_hmac_prefix(u8 *prefix,
+		struct ubi_vid_hdr *vid_hdr, __be32 len)
+{
+	int i = 0;
+	/* Computation of the HMAC tag prefix */
+	/*
+	 * VID || lnum || sqnum
+	 */
+	memcpy(prefix, &vid_hdr->vol_id, sizeof(vid_hdr->vol_id));
+	i += sizeof(vid_hdr->vol_id);
+	memcpy(prefix + i, &vid_hdr->lnum, sizeof(vid_hdr->lnum));
+	i += sizeof(vid_hdr->lnum);
+	memcpy(prefix + i, &vid_hdr->sqnum, sizeof(vid_hdr->sqnum));
+	i += sizeof(vid_hdr->sqnum);
+	memcpy(prefix + i, &len, sizeof(len));
+}
+
+static int compute_hmac_key(u8 *hmac_key, unsigned int ksize,
+		struct ubi_key *k, __be32 pnum)
+{
+	unsigned int len = min(ksize - sizeof(pnum), k->key_len);
+
+	if (ksize < sizeof(pnum))
+		return -EINVAL;
+
+	if (!BAD_PTR(k->key)) {
+		memcpy(hmac_key, k->key, len);
+	}
+	memcpy(hmac_key + ksize - sizeof(pnum), &pnum, sizeof(pnum));
+	return 0;
+}
+
+/**
+ * ubi_crypto_compute_hash - Compute an HMAC tag
+ * @unit: The crypto unit that will perform the hash
+ * @key: The key used within the HMAC computing
+ * @vid_hdr: The VID header object of the target LEB
+ * @pnum: The targeted PEB's number
+ * @data: Extra data to integrate into the hash
+ * @len: Length of @data
+ *
+ * This function assumes @unit is already acquired and
+ * does not perform any pointer checking on it. It needs
+ * the @vid_hdr to establish the HMAC prefix using
+ * the LEB's sqnum, lnum and volume id. The @pnum is
+ * also required since it is used to tweak the key.
+ *
+ * Finally, the function accepts additionnal data through @data.
+ * This way, the same function can be used to compute all the
+ * HMAC tags of a particular HMAC header. The caller just
+ * has to parse and feed this function the LEB's data appropriately.
+ */
+u8 *ubi_crypto_compute_hash(struct ubi_crypto_unit *unit,
+		struct ubi_key *key, struct ubi_vid_hdr *vid_hdr, __be32 pnum,
+		u8 *data, unsigned int len)
+{
+	int err = 0, nb_sg = 0;
+	unsigned int digest_len = 0, prefix_len = 0, key_len = 0;
+	u8 *htag_key = NULL, *htag_prefix = NULL, *htag_out = NULL;
+	struct scatterlist *sg = NULL;
+	struct crypto_hash *hash = (struct crypto_hash*)unit->hmac.tfm;
+	struct hash_desc desc = {.tfm = hash, .flags = 0};
+
+	if (BAD_PTR(unit) || BAD_PTR(vid_hdr) ||
+		BAD_PTR(key)) {
+		err = -EINVAL;
+		goto exit;
+	}
+	if (!BAD_PTR(key) && !BAD_PTR(key->key)) {
+		key_len = key->key_len;
+	}
+	mutex_lock(&unit->hmac.mutex);
+	digest_len = crypto_hash_digestsize(hash);
+	prefix_len = ALIGN_UP(UBI_HMAC_PREFIX_LEN, digest_len);
+	key_len = ALIGN_UP(key_len + sizeof(pnum), digest_len);
+
+	if (NULL == (htag_out = kzalloc(digest_len, GFP_NOFS))) {
+		err = -ENOMEM;
+		goto exit_unlock;
+	}
+
+	if (NULL == (htag_key = kzalloc(key_len, GFP_NOFS))) {
+		err = -ENOMEM;
+		goto exit_unlock;
+	}
+
+	if (NULL == (htag_prefix = kzalloc(prefix_len, GFP_NOFS))) {
+		err = - ENOMEM;
+		goto exit_unlock;
+	}
+
+
+	if (!BAD_PTR(data) && len) {
+		nb_sg = UPDIV(len, PAGE_SIZE) + 1;
+		sg = kzalloc(sizeof(struct scatterlist)*nb_sg, GFP_NOFS);
+		fill_sg(sg+1, data, len);
+	} else {
+		len = 0;
+		sg = kzalloc(sizeof(struct scatterlist), GFP_NOFS);
+		if (NULL == sg) {
+			err = -ENOMEM;
+			goto exit_unlock;
+		}
+	}
+	sg_set_buf(sg, htag_prefix, prefix_len);
+
+	compute_hmac_prefix(htag_prefix, vid_hdr, len);
+	err = compute_hmac_key(htag_key, key_len, key, pnum);
+	if (err) {
+		/*
+		 * Should never ever happen !
+		 * Editing the key pointer would have lead
+		 * to a segfault hence the %EFAULT error value.
+		 */
+		err = -EFAULT;
+		goto exit_unlock;
+	}
+
+	crypto_hash_digest(&desc, sg, len + prefix_len, htag_out);
+	exit_unlock:
+	mutex_unlock(&unit->hmac.mutex);
+	exit:
+	if (htag_key)
+		kfree(htag_key);
+
+	if (htag_prefix)
+		kfree(htag_key);
+
+	if (sg)
+		kfree(sg);
+
+	if (err) {
+		if (htag_out) {
+			kfree(htag_out);
+			return ERR_PTR(err);
+		}
+	}
+	return htag_out;
+}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 /**
  * ubi_crypto_compute_iv - Compute the IV for a R/W operation
@@ -70,6 +221,31 @@ static inline __u8 *ubi_crypto_compute_iv(__be64 sqnum, int offset, int klen)
 	return iv;
 }
 
+static void fill_sg(struct scatterlist *sg, u8 *data, unsigned int len)
+{
+	int vmalloced = IS_VMALLOC(data);
+	struct page *pg = NULL;
+	int offs, shift;
+
+	if (!len || BAD_PTR(data))
+		return;
+
+	while (len) {
+		offs = offset_in_page(data);
+		shift = min(len, PAGE_SIZE - offs);
+		if (vmalloced) {
+			pg = vmalloc_to_page(data);
+		} else {
+			pg = virt_to_page(data);
+		}
+		sg_set_page(sg, pg, shift, offs);
+		len -= shift;
+		data += shift;
+		sg++;
+	}
+	sg_mark_end(--sg);
+}
+
 static int ubi_crypto_get_sg(struct scatterlist **sg,
 		void *ptr, unsigned int len,
 		unsigned int lpad, unsigned int blk_size)
@@ -77,12 +253,10 @@ static int ubi_crypto_get_sg(struct scatterlist **sg,
 	unsigned int sg_nb = len/PAGE_SIZE +
 			(0 != (len%PAGE_SIZE)) +
 			(0 != lpad);
-	unsigned long shift = 0, offs = 0, to_cpy = 0;
+	unsigned long to_cpy = 0;
 	struct scatterlist *tmp;
-	int vmalloced = IS_VMALLOC(ptr);
 	int err = 0;
 	void *pad = NULL;
-	struct page *page = NULL;
 
 	if (BAD_PTR(ptr) || BAD_PTR(sg) || 0 == len) {
 		return -EINVAL;
@@ -111,21 +285,8 @@ static int ubi_crypto_get_sg(struct scatterlist **sg,
 		to_cpy = 0;
 	}
 	tmp = (*sg + (0 != lpad));
+	fill_sg(tmp, ptr, len);
 
-	while (len) {
-		offs = offset_in_page(ptr);
-		shift = min((unsigned long)len, PAGE_SIZE - offs);
-		if (vmalloced) {
-			page = vmalloc_to_page(ptr);
-		} else {
-			page = virt_to_page(ptr);
-		}
-		sg_set_page(tmp, page, shift, offs);
-		len -= shift;
-		ptr += shift;
-		tmp++;
-	}
-	sg_mark_end(--tmp);
 	return err;
 }
 
@@ -273,7 +434,7 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	 * FIXME : When HMAC support will be deployed,
 	 * We must determine which key has to be used.
 	 */
-#ifndef UBI_CRYPTO_HMAC
+#ifndef CONFIG_UBI_CRYPTO_HMAC
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
 		if (info->dst != info->src) {
 			memcpy(info->dst, info->src, info->len);
@@ -283,7 +444,8 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	}
 	key = &k->cur;
 #else
-	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr, k);
+	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr,
+			info->pnum, k);
 	if (BAD_PTR(key)) {
 		dbg_crypto("Cannot proceed ! We do not own the key");
 		err = -EACCES;

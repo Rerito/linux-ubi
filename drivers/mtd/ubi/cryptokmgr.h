@@ -149,6 +149,9 @@ void ubi_kmgr_put_kentry(struct ubi_key_entry *kentry);
 
 int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 		struct ubi_kmgr_set_vol_key_req *req);
+struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
+		struct ubi_vid_hdr *vid_hdr, int pnum,
+		struct ubi_key_entry *kentry);
 void ubi_kmgr_ack_update(struct ubi_key_entry *kentry);
 
 struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev);

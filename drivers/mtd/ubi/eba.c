@@ -471,7 +471,11 @@ retry:
 	if (err) {
 		goto out_free;
 	}
-	err = ubi_io_read_data(ubi, crypt, pnum, offset, len);
+	err = ubi_io_read_data(ubi, crypt, pnum, offset, len
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+				   , vol->hmac
+#endif
+				   );
 	if (!(len & (ubi->min_io_size - 1))) {
 		data_size = ubi_calc_data_len(ubi, crypt, len);
 	}
@@ -623,7 +627,11 @@ retry:
 			err = -ENOMEM;
 			goto out_unlock;
 		}
-		err = ubi_io_read_data(ubi, crypt, pnum, 0, offset);
+		err = ubi_io_read_data(ubi, crypt, pnum, 0, offset
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+				   , vol->hmac
+#endif
+				   );
 #else
 		err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, offset);
 #endif
@@ -656,7 +664,11 @@ retry:
 
 	memcpy(ubi->peb_buf + offset, buf, len);
 
-	err = ubi_io_write_data(ubi, ubi->peb_buf, new_pnum, 0, data_size);
+	err = ubi_io_write_data(ubi, ubi->peb_buf, new_pnum, 0, data_size
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+			, vol->hmac
+#endif
+			);
 	if (err) {
 		mutex_unlock(&ubi->buf_mutex);
 		goto write_error;
@@ -768,7 +780,11 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 		err = ubi_crypto_cipher(&info);
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		vid_hdr = NULL;
-		err = ubi_io_write_data(ubi, crypt, pnum, offset, len);
+		err = ubi_io_write_data(ubi, crypt, pnum, offset, len
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+				   , vol->hmac
+#endif
+				   );
 		SAFE_FREE(crypt);
 #else
 		err = ubi_io_write_data(ubi, buf, pnum, offset, len);
@@ -842,7 +858,11 @@ retry:
 			SAFE_FREE(buf);
 			return err;
 		}
-		err = ubi_io_write_data(ubi, crypt, pnum, offset, len);
+		err = ubi_io_write_data(ubi, crypt, pnum, offset, len
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+				   , vol->hmac
+#endif
+				   );
 #else
 		err = ubi_io_write_data(ubi, buf, pnum, offset, len);
 #endif // CONFIG_MTD_UBI_CRYPTO
@@ -1013,7 +1033,11 @@ retry:
 		goto write_error;
 	}
 
-	err = ubi_io_write_data(ubi, buf, pnum, 0, len);
+	err = ubi_io_write_data(ubi, buf, pnum, 0, len
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+			, vol->hmac
+#endif
+			);
 	if (err) {
 		ubi_warn("failed to write %d bytes of data to PEB %d",
 			 len, pnum);
@@ -1074,10 +1098,20 @@ static int hmac_tag_lookup(struct ubi_key *key, void *p)
 	int err = 0, i = 0;
 	u8 hmac_tag_out[16];
 	u8 hmac_tag_in[20];
+	u8 hmac_key[20];
+	struct scatterlist sg_in;
+	struct hash_desc desc;
+	size_t len = min(sizeof(hmac_key), key->key_len);
 	struct ubi_hmac_lu_data *d = p;
-	if (BAD_PTR(d)) {
+
+	memset(hmac_key, 0, sizeof(hmac_key));
+	if (BAD_PTR(d) || BAD_PTR(d->unit)) {
 		return 0;
 	}
+
+	desc.tfm = (struct crypto_hash*)d->unit->hmac.tfm;
+	sg_init_table(&sg_in, 1);
+	sg_set_buf(&sg_in, hmac_tag_in, sizeof(hmac_tag_in));
 
 	memcpy(&hmac_tag_in[i], &d->vid_hdr->vol_id,
 			sizeof(d->vid_hdr->vol_id));
@@ -1089,8 +1123,16 @@ static int hmac_tag_lookup(struct ubi_key *key, void *p)
 			sizeof(d->vid_hdr->sqnum));
 	i += sizeof(d->vid_hdr->sqnum);
 	memcpy(&hmac_tag_in[i], &d->pnum, sizeof(d->pnum));
+	memcpy(hmac_key, key->key, len);
+	memcpy(hmac_key + sizeof(hmac_key) - sizeof(d->pnum),
+			&d->pnum, sizeof(d->pnum));
+	mutex_lock(&d->unit->hmac.mutex);
+	crypto_hash_setkey((struct crypto_hash*)d->unit->hmac.tfm,
+			hmac_key, sizeof(hmac_key));
 
-//	crypto_hash_digest();
+	crypto_hash_digest(&desc, &sg_in, sizeof(hmac_tag_in),
+			hmac_tag_out);
+	mutex_unlock(&d->unit->hmac.mutex);
 }
 
 int ubi_eba_update_leb(struct ubi_device *ubi, struct ubi_volume *vol,
@@ -1251,7 +1293,11 @@ retry:
 	}
 
 #ifdef CONFIG_MTD_UBI_CRYPTO
-	err = ubi_io_write_data(ubi, crypt, pnum, 0, len);
+	err = ubi_io_write_data(ubi, crypt, pnum, 0, len
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+				   , vol->hmac
+#endif
+				   );
 #else
 	err = ubi_io_write_data(ubi, buf, pnum, 0, len);
 #endif // CONFIG_MTD_UBI_CRYPTO
@@ -1425,7 +1471,11 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 	 */
 	mutex_lock(&ubi->buf_mutex);
 	dbg_wl("read %d bytes of data", aldata_size);
-	err = ubi_io_read_data(ubi, ubi->peb_buf, from, 0, aldata_size);
+	err = ubi_io_read_data(ubi, ubi->peb_buf, from, 0, aldata_size
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+				   , vol->hmac
+#endif
+				   );
 	if (err && err != UBI_IO_BITFLIPS) {
 		ubi_warn("error %d while reading data from PEB %d",
 			 err, from);
@@ -1532,7 +1582,11 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 	}
 
 	if (data_size > 0) {
-		err = ubi_io_write_data(ubi, ubi->peb_buf, to, 0, aldata_size);
+		err = ubi_io_write_data(ubi, ubi->peb_buf, to, 0, aldata_size
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+			, vol->hmac
+#endif
+			);
 		if (err) {
 			if (err == -EIO)
 				err = MOVE_TARGET_WR_ERR;
@@ -1546,7 +1600,11 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 		 * sure it was written correctly.
 		 */
 		memset(ubi->peb_buf, 0xFF, aldata_size);
-		err = ubi_io_read_data(ubi, ubi->peb_buf, to, 0, aldata_size);
+		err = ubi_io_read_data(ubi, ubi->peb_buf, to, 0, aldata_size
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+			, vol->hmac
+#endif
+			);
 		if (err) {
 			if (err != UBI_IO_BITFLIPS) {
 				ubi_warn("error %d while reading data back from PEB %d",
