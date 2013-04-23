@@ -454,10 +454,12 @@ struct ubi_key *ubi_kmgr_key_lookup(struct ubi_key_entry *kentry,
 	}
 	down_read(&kentry->kr_sem);
 	list_for_each_entry(k, &kentry->key_ring, entry) {
+		ubi_kmgr_get_key(k);
 		if (lookup(k, private)) {
 			up_read(&kentry->kr_sem);
 			return k;
 		}
+		ubi_kmgr_put_key(k);
 	}
 	up_read(&kentry->kr_sem);
 	return ERR_PTR(-ENODATA);
@@ -631,14 +633,15 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	}
 
 	list_for_each_entry(key, &kentry->key_ring, entry) {
+		ubi_kmgr_get_key(key);
 		hmac_tag = ubi_crypto_compute_hash(u, key, vid_hdr,
 				be_pnum, NULL, 0);
 		if (IS_ERR(hmac_tag)) {
 			err = PTR_ERR(hmac_tag);
+			ubi_kmgr_put_key(key);
 			break;
 		}
 		if (!memcmp(hmac_tag, hmac_hdr->htag, comp_len)) {
-			ubi_kmgr_get_key(key);
 			ubi_kval_insert(&key->val_tree, lnum, lnum);
 			ubi_kval_remove(&kentry->unknown, lnum, lnum);
 			err = 0;
@@ -646,6 +649,7 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 		}
 		kfree(hmac_tag);
 		hmac_tag = NULL;
+		ubi_kmgr_put_key(key);
 	}
 
 	exit:
@@ -663,9 +667,26 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 
 #endif // CONFIG_UBI_CRYPTO_HMAC
 
+/**
+ * ubi_kmgr_get_leb_key - Get the crypto key of a LEB
+ * @hmac_hdr: The HMAC header of the LEB
+ * @vid_hdr: The VID header of the LEB
+ * @pnum: The PEB on which the LEB is written
+ * @kentry: The volume key entry
+ * @probe: Does the caller want to probe the key if unknown ?
+ *
+ * This function will look up the key ring of @kentry to find
+ * the key that was used to encrypt the given LEB.
+ * It first searches for the LEB number in the interval tree
+ * of each key. If not found, depending on @probe, it will then
+ * try to guess which key is used by trying to "open the door
+ * with all the keys in the ring". Here opening the door means
+ * compute the HMAC tag and compare it to the one in @hmac_hdr.
+ */
 struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 		struct ubi_vid_hdr *vid_hdr, int pnum,
-		struct ubi_key_entry *kentry)
+		struct ubi_key_entry *kentry,
+		int probe)
 {
 	u32 lnum;
 	struct ubi_key *key = NULL;
@@ -683,13 +704,12 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	}
 
 	if (!ubi_kval_is_in_tree(&kentry->unknown, lnum) ||
-			kentry->upd) {
-		if (kentry->upd) {
-			ubi_kmgr_ack_update(kentry);
-			ubi_kval_clear_tree(&kentry->unknown);
-//			ubi_kval_set_sane(&kentry->unknown, 1);
-			kentry->unknown.dying = 0;
-		}
+			probe) {
+//		if (kentry->upd) {
+//			ubi_kmgr_ack_update(kentry);
+//			ubi_kval_clear_tree(&kentry->unknown);
+//			kentry->unknown.dying = 0;
+//		}
 		key = ubi_kmgr_probe_leb_key(hmac_hdr, vid_hdr, pnum, kentry);
 		if (BAD_PTR(key)) {
 			ubi_kval_insert(&kentry->unknown, lnum, lnum);
@@ -776,10 +796,24 @@ int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 	struct ubi_key *key = NULL;
 	int err = 0;
 	k = req->key.k;
-	if (unlikely(BAD_PTR(tree) || IS_ERR(k))) {
+	len = req->key.len;
+	if (unlikely(BAD_PTR(tree) || (BAD_PTR(k) && 0 != len))) {
 		return -EINVAL;
 	}
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (!req->tagged && !req->main) {
+		/*
+		 * If the volume is not tag and
+		 * the key is an auxiliary key, since this volume
+		 * does not support HMAC headers, we cannot establish
+		 * key integrity and thus, we act like in the raw version.
+		 *
+		 * Hence there is no need to store any auxiliary key
+		 * we return %EPERM to signal that this is pointless
+		 */
+		return -EPERM;
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	vol_id = req->vol_id;
 	vol = req->vol;
 	len = req->key.len;
@@ -787,30 +821,10 @@ int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 
 	kentry = ubi_kmgr_get_kentry(tree, vol_id);
 	if (NULL == kentry) {
-		if (NULL == k || 0 == len) {
-			return -EINVAL;
-		}
 		kentry = ubi_kmgr_alloc_kentry(vol_id, k, len, main);
 		if (IS_ERR(kentry)) {
 			return PTR_ERR(kentry);
 		}
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-		kentry->vol = vol;
-		kentry->tagged = req->tagged;
-		if (!req->tagged && !main) {
-			/*
-			 * If the volume is not tag and
-			 * the key is an auxiliary key, since this volume
-			 * does not support HMAC headers, we cannot establish
-			 * key integrity and thus, we act like in the raw version.
-			 *
-			 * Hence there is no need to store any auxiliary key
-			 * we return %EPERM to signal that this is pointless
-			 */
-			ubi_kmgr_free_kentry(kentry);
-			return -EPERM;
-		}
-#endif // CONFIG_UBI_CRYPTO_HMAC
 		down_write(&tree->sem);
 		err = ubi_kmgr_insert_kentry(tree, kentry);
 		if (err) {
@@ -851,24 +865,19 @@ int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 				list_add(&key->entry, &kentry->key_ring);
 				up_write(&kentry->kr_sem);
 
-				if (main) {
-					/*
-					 * TODO : trigger/reset update worker
-					 */
-				}
-			} else {
-				if (main && (key != kentry->main)) {
-					/* TODO :
-					 * Update main status for the key
-					 * trigger/reset update worker
-					 */
-				} else if (!main && (key == kentry->main)) {
-					/*
-					 * TODO : trigger/reset update worker
-					 */
-				}
-				/* Else, nothing to do */
 			}
+
+			if (main && (key != kentry->main)) {
+				/* TODO :
+				 * Update main status for the key
+				 * trigger/reset update worker
+				 */
+			} else if (!main && (key == kentry->main)) {
+				/*
+				 * TODO : trigger/reset update worker
+				 */
+			}
+			/* Else, nothing to do */
 		} else {
 			if (main) {
 				/*

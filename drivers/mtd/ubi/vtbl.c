@@ -313,6 +313,9 @@ static int create_vtbl(struct ubi_device *ubi, struct ubi_attach_info *ai,
 {
 	int err, tries = 0;
 	struct ubi_vid_hdr *vid_hdr;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	struct ubi_hmac_hdr *hmac_hdr;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	struct ubi_ainf_peb *new_aeb;
 
 	dbg_gen("create volume table (copy #%d)", copy + 1);
@@ -320,6 +323,14 @@ static int create_vtbl(struct ubi_device *ubi, struct ubi_attach_info *ai,
 	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_KERNEL);
 	if (!vid_hdr)
 		return -ENOMEM;
+
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	hmac_hdr = ubi_zalloc_hmac_hdr(ubi, GFP_KERNEL);
+	if (!hmac_hdr) {
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		return -ENOMEM;
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 retry:
 	new_aeb = ubi_early_get_peb(ubi, ai);
@@ -335,19 +346,25 @@ retry:
 			     vid_hdr->data_pad = cpu_to_be32(0);
 	vid_hdr->lnum = cpu_to_be32(copy);
 	vid_hdr->sqnum = cpu_to_be64(++ai->max_sqnum);
-
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi->hmac) {
+		vid_hdr->hmac_hdr_offset = ubi->hmac_hdr_offset;
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	/* The EC header is already there, write the VID header */
 	err = ubi_io_write_vid_hdr(ubi, new_aeb->pnum, vid_hdr);
 	if (err)
 		goto write_error;
 
-	/* Write the layout volume contents */
-	/* The layout volume is never encrypted ! */
-	err = ubi_io_write_data(ubi, vtbl, new_aeb->pnum, 0, ubi->vtbl_size
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-		   , 0
+	err = ubi_io_write_hmac_hdr(ubi, new_aeb->pnum, hmac_hdr);
+	if (err)
+		goto write_error;
 #endif
-		   );
+	/* Write the layout volume contents */
+	/* The layout volume is never encrypted, but
+	 * the header could be present for consistency */
+	err = ubi_io_write_data(ubi, vtbl, new_aeb->pnum, 0, ubi->vtbl_size);
 	if (err)
 		goto write_error;
 
@@ -371,6 +388,9 @@ write_error:
 	}
 	kmem_cache_free(ai->aeb_slab_cache, new_aeb);
 out_free:
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	ubi_free_vid_hdr(ubi, vid_hdr);
 	return err;
 
@@ -432,11 +452,7 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi,
 		}
 
 		err = ubi_io_read_data(ubi, leb[aeb->lnum], aeb->pnum, 0,
-				       ubi->vtbl_size
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-				       , 0
-#endif
-				       );
+				ubi->vtbl_size);
 		if (err == UBI_IO_BITFLIPS || mtd_is_eccerr(err))
 			/*
 			 * Scrub the PEB later. Note, -EBADMSG indicates an
@@ -522,6 +538,11 @@ static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi,
 	vtbl = vzalloc(ubi->vtbl_size);
 	if (!vtbl)
 		return ERR_PTR(-ENOMEM);
+
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	empty_vtbl_record.hmac = 1;
+	ubi->hmac = 1;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 	for (i = 0; i < ubi->vtbl_slots; i++)
 		memcpy(&vtbl[i], &empty_vtbl_record, UBI_VTBL_RECORD_SIZE);

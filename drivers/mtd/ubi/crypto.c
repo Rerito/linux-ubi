@@ -119,8 +119,7 @@ u8 *ubi_crypto_compute_hash(struct ubi_crypto_unit *unit,
 	struct crypto_hash *hash = (struct crypto_hash*)unit->hmac.tfm;
 	struct hash_desc desc = {.tfm = hash, .flags = 0};
 
-	if (BAD_PTR(unit) || BAD_PTR(vid_hdr) ||
-		BAD_PTR(key)) {
+	if (BAD_PTR(unit) || BAD_PTR(vid_hdr)) {
 		err = -EINVAL;
 		goto exit;
 	}
@@ -130,12 +129,16 @@ u8 *ubi_crypto_compute_hash(struct ubi_crypto_unit *unit,
 	mutex_lock(&unit->hmac.mutex);
 	digest_len = crypto_hash_digestsize(hash);
 	prefix_len = ALIGN_UP(UBI_HMAC_PREFIX_LEN, digest_len);
-	key_len = ALIGN_UP(key_len + sizeof(pnum), digest_len);
 
 	if (NULL == (htag_out = kzalloc(digest_len, GFP_NOFS))) {
 		err = -ENOMEM;
 		goto exit_unlock;
 	}
+
+	if (!key_len)
+		goto exit_unlock;
+
+	key_len = ALIGN_UP(key_len + sizeof(pnum), digest_len);
 
 	if (NULL == (htag_key = kzalloc(key_len, GFP_NOFS))) {
 		err = -ENOMEM;
@@ -403,7 +406,9 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	struct ubi_key_entry *k = NULL;
 	struct ubi_key *key = NULL;
 	struct ubi_key_tree *tree = NULL;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
 	struct ubi_hmac_hdr *hmac_hdr = NULL;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	__u8 *iv = NULL;
 	if (BAD_PTR(info->vid_hdr)) {
 		return -EINVAL;
@@ -436,7 +441,8 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	 */
 #ifndef CONFIG_UBI_CRYPTO_HMAC
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
-		if (info->dst != info->src) {
+		if (likely(!((info->dst < info->src + info->len) &&
+				(info->dst + info->len > info->src)))) {
 			memcpy(info->dst, info->src, info->len);
 		}
 		err = 0;
@@ -444,11 +450,48 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	}
 	key = &k->cur;
 #else
+	if (BAD_PTR(k)) {
+		/*
+		 * If k = NULL there is no registered key entry, but we want
+		 * to have LEB key information in interval trees, so we
+		 * ask for its creation through @ubi_kmgr_setvolkey
+		 *
+		 * This is a bit inelegant and should be changed
+		 */
+		struct ubi_kmgr_set_vol_key_req req = {
+				.vol_id = info->vid_hdr->vol_id,
+				.vol = info->vid_hdr,
+				.tagged = info->vid_hdr->hmac_hdr_offset,
+				.key = {.k = NULL, .len = 0},
+				.main = 1
+		};
+		if ((err = PTR_ERR(k)))
+			goto exit;
+
+		err = ubi_kmgr_setvolkey(tree, &req);
+		if (err) {
+			dbg_crypto("An error occured while initializing an empty kentry");
+			goto exit;
+		}
+
+	}
 	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr,
-			info->pnum, k);
+			info->pnum, k, 1);
 	if (BAD_PTR(key)) {
-		dbg_crypto("Cannot proceed ! We do not own the key");
+		if (-ENODATA == (err = PTR_ERR(key))) {
+			dbg_crypto("No matching key found !");
+		}
 		err = -EACCES;
+		goto exit;
+	}
+	if (!key->key_len) {
+		dbg_crypto("<NULL> key : no ciphering");
+		if (likely(!((info->dst < info->src + info->len) &&
+				(info->dst + info->len > info->src)))) {
+			memcpy(info->dst, info->src, info->len);
+		} else {
+			err = -EINVAL;
+		}
 		goto exit;
 	}
 #endif

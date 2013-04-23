@@ -579,6 +579,7 @@ struct ubi_device {
 	int leb_size;
 	int leb_start;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
+	int hmac;
 	int hmac_leb_size;
 	int hmac_leb_start;
 #endif
@@ -1007,9 +1008,9 @@ static inline void ubi_free_hmac_hdr(const struct ubi_device *ubi,
  */
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 static inline int ubi_io_read_data(struct ubi_device *ubi, void *buf,
-				    int pnum, int offset, int len, int hmac)
+				    int pnum, int offset, int len)
 {
-	int leb_start = (hmac) ? ubi->hmac_leb_start
+	int leb_start = (ubi->hmac) ? ubi->hmac_leb_start
 			               : ubi->leb_start;
 	ubi_assert(offset >= 0);
 	return ubi_io_read(ubi, buf, pnum,
@@ -1032,9 +1033,9 @@ static inline int ubi_io_read_data(const struct ubi_device *ubi, void *buf,
  */
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 static inline int ubi_io_write_data(struct ubi_device *ubi, const void *buf,
-				    int pnum, int offset, int len, int hmac)
+				    int pnum, int offset, int len)
 {
-	int leb_start = (hmac) ? ubi->hmac_leb_start
+	int leb_start = (ubi->hmac) ? ubi->hmac_leb_start
 			               : ubi->leb_start;
 	ubi_assert(offset >= 0);
 	return ubi_io_write(ubi, buf, pnum,

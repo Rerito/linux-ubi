@@ -32,7 +32,7 @@ struct ubi_vid_hdr;
 struct ubi_crypto_cipher_info {
 	int pnum, offset, ubi_dev;
 	size_t len;
-	void *src, *dst;
+	u8 *src, *dst;
 	struct ubi_vid_hdr *vid_hdr;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	struct ubi_hmac_hdr *hmac_hdr;

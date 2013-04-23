@@ -106,7 +106,7 @@ static void ubi_cru_free_unit(struct ubi_crypto_unit *unit)
 	mutex_unlock(&unit->aes.mutex);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	mutex_lock(&unit->hmac.mutex);
-	crypto_free_aead((struct crypto_aead*)unit->hmac.tfm);
+	crypto_free_hash((struct crypto_hash*)unit->hmac.tfm);
 	mutex_unlock(&unit->hmac.mutex);
 #endif
 	mutex_unlock(&unit->mutex);

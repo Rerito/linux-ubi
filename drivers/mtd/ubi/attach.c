@@ -397,11 +397,7 @@ int ubi_compare_lebs(struct ubi_device *ubi, const struct ubi_ainf_peb *aeb,
 	len = be32_to_cpu(vid_hdr->data_size);
 
 	mutex_lock(&ubi->buf_mutex);
-	err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, len
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-			, vid_hdr->hmac_hdr_offset
-#endif
-			);
+	err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, len);
 	if (err && err != UBI_IO_BITFLIPS && !mtd_is_eccerr(err))
 		goto out_unlock;
 

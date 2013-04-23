@@ -1268,7 +1268,9 @@ static int __init ubi_init(void)
 	if (err)
 		goto out_slab;
 
-
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	ubi_crypto_init();
+#endif // CONFIG_MTD_UBI_CRYPTO
 	/* Attach MTD devices */
 	for (i = 0; i < mtd_devs; i++) {
 		struct mtd_dev_param *p = &mtd_dev_param[i];
@@ -1307,9 +1309,6 @@ static int __init ubi_init(void)
 				goto out_detach;
 		}
 	}
-#ifdef CONFIG_MTD_UBI_CRYPTO
-	ubi_crypto_init();
-#endif // CONFIG_MTD_UBI_CRYPTO
 	return 0;
 
 out_detach:
@@ -1320,6 +1319,9 @@ out_detach:
 			mutex_unlock(&ubi_devices_mutex);
 		}
 	ubi_debugfs_exit();
+#ifdef CONFIG_MTD_UBI_CRYPTO
+	ubi_crypto_term();
+#endif
 out_slab:
 	kmem_cache_destroy(ubi_wl_entry_slab);
 out_dev_unreg:

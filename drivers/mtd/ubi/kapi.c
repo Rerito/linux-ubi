@@ -39,7 +39,12 @@
 void ubi_do_get_device_info(struct ubi_device *ubi, struct ubi_device_info *di)
 {
 	di->ubi_num = ubi->ubi_num;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	di->leb_size = (ubi->hmac) ? ubi->hmac_leb_size
+			: ubi->leb_size;
+#else
 	di->leb_size = ubi->leb_size;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	di->leb_start = ubi->leb_start;
 	di->min_io_size = ubi->min_io_size;
 	di->max_write_size = ubi->max_write_size;

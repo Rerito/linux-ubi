@@ -204,6 +204,10 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	struct ubi_volume *vol;
 	struct ubi_vtbl_record vtbl_rec;
 	dev_t dev;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	int leb_size = (ubi->hmac) ? ubi->hmac_leb_size
+			: ubi->leb_size;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 	if (ubi->ro_mode)
 		return -EROFS;
@@ -252,8 +256,8 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 
 	/* Calculate how many eraseblocks are requested */
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-	vol->usable_leb_size = ubi->hmac_leb_size -
-			ubi->hmac_leb_size % req->alignment;
+	vol->usable_leb_size = leb_size -
+			leb_size % req->alignment;
 #else
 	vol->usable_leb_size = ubi->leb_size - ubi->leb_size % req->alignment;
 #endif // CONFIG_UBI_CRYPTO_HMAC
@@ -276,8 +280,8 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	vol->vol_id    = vol_id;
 	vol->alignment = req->alignment;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-	vol->data_pad  = ubi->hmac_leb_size % vol->alignment;
-	vol->hmac = 1;
+	vol->data_pad  = leb_size % vol->alignment;
+	vol->hmac = !!ubi->hmac;
 #else
 	vol->data_pad  = ubi->leb_size % vol->alignment;
 #endif // CONFIG_UBI_CRYPTO_HMAC
@@ -351,7 +355,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	vtbl_rec.data_pad      = cpu_to_be32(vol->data_pad);
 	vtbl_rec.name_len      = cpu_to_be16(vol->name_len);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-	vtbl_rec.hmac = 1;
+	vtbl_rec.hmac = vol->hmac;
 #endif // CONFIG_UBI_CRYPTO_HMAC
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME)
 		vtbl_rec.vol_type = UBI_VID_DYNAMIC;
