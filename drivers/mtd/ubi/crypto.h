@@ -30,10 +30,11 @@ struct ubi_vid_hdr;
  * to perform an encryption/decryption operation.
  */
 struct ubi_crypto_cipher_info {
-	int pnum, offset, ubi_dev;
+	int pnum, offset;
 	size_t len;
 	u8 *src, *dst;
 	struct ubi_vid_hdr *vid_hdr;
+	struct ubi_device *ubi;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	struct ubi_hmac_hdr *hmac_hdr;
 #endif

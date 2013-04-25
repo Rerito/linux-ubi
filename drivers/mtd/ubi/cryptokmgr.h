@@ -11,6 +11,7 @@
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 #include "cryptokval.h"
+struct ubi_volume;
 #endif
 
 /**
@@ -106,7 +107,7 @@ struct ubi_key_entry {
 	struct mutex mutex;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	__u8 tagged;
-	void *vol;
+	struct ubi_volume *vol;
 	struct list_head key_ring;
 	struct ubi_key *main;
 	struct rw_semaphore kr_sem;

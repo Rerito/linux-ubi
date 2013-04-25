@@ -735,18 +735,24 @@ static int io_init(struct ubi_device *ubi, int max_beb_per1024)
 
 	/* Similar for the data offset
 	 * and the potential HMAC hdr offset */
+	ubi->leb_start = ubi->vid_hdr_offset + UBI_VID_HDR_SIZE;
+	ubi->leb_start = ALIGN(ubi->leb_start, ubi->min_io_size);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-	ubi->hmac_hdr_offset = ubi->vid_hdr_offset + UBI_VID_HDR_SIZE;
+	ubi->hmac_hdr_offset = ubi->vid_hdr_aloffset + ubi->vid_hdr_alsize;
 	ubi->hmac_hdr_aloffset = ubi->vid_hdr_aloffset
 			+ ubi->vid_hdr_alsize;
 	ubi->hmac_hdr_shift = ubi->hmac_hdr_offset -
 					ubi->hmac_hdr_aloffset;
 	ubi->hmac_leb_start = ubi->hmac_hdr_offset + UBI_HMAC_HDR_SIZE;
-	ubi->hmac_leb_start = ALIGN(ubi->leb_start, ubi->min_io_size);
+	printk("HMAC leb start is %d\n", ubi->hmac_leb_start);
+	ubi->hmac_leb_start = ALIGN(ubi->hmac_leb_start, ubi->min_io_size);
 	ubi->hmac_leb_size = ubi->peb_size - ubi->hmac_leb_start;
+	printk(KERN_ALERT "HMAC hdr params :\n"
+			"hmac_leb_start=%d\n"
+			"hmac_leb_size=%d\n"
+			"min_io_size=%d\n",
+			ubi->hmac_leb_start, ubi->hmac_leb_size, ubi->min_io_size);
 #endif
-	ubi->leb_start = ubi->vid_hdr_offset + UBI_VID_HDR_SIZE;
-	ubi->leb_start = ALIGN(ubi->leb_start, ubi->min_io_size);
 
 	dbg_gen("vid_hdr_offset   %d", ubi->vid_hdr_offset);
 	dbg_gen("vid_hdr_aloffset %d", ubi->vid_hdr_aloffset);

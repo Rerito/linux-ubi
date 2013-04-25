@@ -86,7 +86,7 @@ int ubi_change_vtbl_record(struct ubi_device *ubi, int idx,
 
 	ubi_assert(idx >= 0 && idx < ubi->vtbl_slots);
 	layout_vol = ubi->volumes[vol_id2idx(ubi, UBI_LAYOUT_VOLUME_ID)];
-
+	printk(KERN_ALERT "Passed it !");
 	if (!vtbl_rec)
 		vtbl_rec = &empty_vtbl_record;
 	else {
@@ -97,13 +97,18 @@ int ubi_change_vtbl_record(struct ubi_device *ubi, int idx,
 	memcpy(&ubi->vtbl[idx], vtbl_rec, sizeof(struct ubi_vtbl_record));
 	for (i = 0; i < UBI_LAYOUT_VOLUME_EBS; i++) {
 		err = ubi_eba_unmap_leb(ubi, layout_vol, i);
-		if (err)
+		if (err) {
+			printk("Got error on ubi_eba_unmap_leb : %d\n", err);
 			return err;
+		}
 
 		err = ubi_eba_write_leb(ubi, layout_vol, i, ubi->vtbl, 0,
 					ubi->vtbl_size);
-		if (err)
+		printk("%s - eba_write terminated ...\n", __func__);
+		if (err) {
+			printk("Got error on ubi_eba_write_leb : %d\n", err);
 			return err;
+		}
 	}
 
 	self_vtbl_check(ubi);
@@ -535,14 +540,22 @@ static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi,
 	int i;
 	struct ubi_vtbl_record *vtbl;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	empty_vtbl_record.hmac = 1;
+	ubi->hmac = 1;
+	ubi->vtbl_slots = ubi->hmac_leb_size / UBI_VTBL_RECORD_SIZE;
+	if (ubi->vtbl_slots > UBI_MAX_VOLUMES)
+		ubi->vtbl_slots = UBI_MAX_VOLUMES;
+	ubi->vtbl_size = ubi->vtbl_slots*UBI_VTBL_RECORD_SIZE;
+	ubi->vtbl_size = ALIGN(ubi->vtbl_size, ubi->min_io_size);
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 	vtbl = vzalloc(ubi->vtbl_size);
 	if (!vtbl)
 		return ERR_PTR(-ENOMEM);
 
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	empty_vtbl_record.hmac = 1;
-	ubi->hmac = 1;
-#endif // CONFIG_UBI_CRYPTO_HMAC
+
+	printk("Creating empty layout volume !\n");
 
 	for (i = 0; i < ubi->vtbl_slots; i++)
 		memcpy(&vtbl[i], &empty_vtbl_record, UBI_VTBL_RECORD_SIZE);
@@ -836,7 +849,13 @@ int ubi_read_volume_table(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	 * The number of supported volumes is limited by the eraseblock size
 	 * and by the UBI_MAX_VOLUMES constant.
 	 */
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi->hmac) {
+		ubi->vtbl_slots = ubi->hmac_leb_size / UBI_VTBL_RECORD_SIZE;
+	}
+#else
 	ubi->vtbl_slots = ubi->leb_size / UBI_VTBL_RECORD_SIZE;
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	if (ubi->vtbl_slots > UBI_MAX_VOLUMES)
 		ubi->vtbl_slots = UBI_MAX_VOLUMES;
 

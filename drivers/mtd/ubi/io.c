@@ -244,7 +244,7 @@ int ubi_io_write(struct ubi_device *ubi, const void *buf, int pnum, int offset,
 	loff_t addr;
 
 	dbg_io("write %d bytes to PEB %d:%d", len, pnum, offset);
-
+	printk(KERN_ALERT "write %d bytes to PEB %d:%d\n", len, pnum, offset);
 	ubi_assert(pnum >= 0 && pnum < ubi->peb_count);
 	ubi_assert(offset >= 0 && offset + len <= ubi->peb_size);
 	ubi_assert(offset % ubi->hdrs_min_io_size == 0);
@@ -944,7 +944,8 @@ static int validate_vid_hdr(const struct ubi_device *ubi,
 	}
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-	if (vid_hdr->hmac_hdr_offset != ubi->hmac_hdr_offset) {
+	if (ubi->hmac &&
+			vid_hdr->hmac_hdr_offset != ubi->hmac_hdr_offset) {
 		ubi_err("bad hmac header offset");
 		goto bad;
 	}
@@ -1259,7 +1260,7 @@ int ubi_io_write_hmac_hdr(struct ubi_device *ubi, int pnum,
 	if (err)
 		return err;
 
-	hmac_hdr->magic = UBI_HMAC_HDR_MAGIC;
+	hmac_hdr->magic = cpu_to_be32(UBI_HMAC_HDR_MAGIC);
 	if (!hmac_hdr->data_len) {
 		memset(hmac_hdr->top_hmac, 0,
 			2*sizeof(hmac_hdr->top_hmac));
@@ -1273,6 +1274,7 @@ int ubi_io_write_hmac_hdr(struct ubi_device *ubi, int pnum,
 	err = self_check_hmac_hdr(ubi, pnum, hmac_hdr);
 	if (err)
 		return err;
+
 	p = hmac_hdr - ubi->hmac_hdr_shift;
 	err = ubi_io_write(ubi, p, pnum, ubi->hmac_hdr_aloffset,
 			ubi->hmac_hdr_alsize);

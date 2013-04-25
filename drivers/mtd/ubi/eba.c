@@ -383,7 +383,7 @@ int ubi_eba_read_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 	int data_size = len, err_cipher = 0;
 	void *crypt = NULL;
 	struct ubi_crypto_cipher_info info = {.offset = offset,
-                                             .ubi_dev = ubi->ubi_num
+                                             .ubi = ubi
                                             };
 #endif // CONFIG_MTD_UBI_CRYPTO
 	uint32_t uninitialized_var(crc);
@@ -562,7 +562,7 @@ static int recover_peb(struct ubi_device *ubi, int pnum, int vol_id, int lnum,
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
 	__be64 old_sqnum, new_sqnum;
-	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+	struct ubi_crypto_cipher_info info = {.ubi = ubi,
 	                                      .offset = offset,
 	                                      .dst = buf
 	                                     };
@@ -727,7 +727,7 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 	struct ubi_vid_hdr *vid_hdr;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
-	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+	struct ubi_crypto_cipher_info info = {.ubi = ubi,
                                            .offset = offset,
                                            .src = buf,
                                            .len = len
@@ -766,6 +766,9 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 		info.dst = crypt;
 		info.pnum = pnum;
 		err = ubi_crypto_cipher(&info);
+		if (err) {
+			printk("Error on ubi_crypto_cipher : %d\n", err);
+		}
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		vid_hdr = NULL;
 		err = ubi_io_write_data(ubi, crypt, pnum, offset, len);
@@ -833,12 +836,14 @@ retry:
 			ubi_free_vid_hdr(ubi, vid_hdr);
 			return -ENOMEM;
 		}
+		info.src = buf;
 		info.pnum = pnum;
 		info.dst = crypt;
 		info.vid_hdr = vid_hdr;
 		err = ubi_crypto_cipher(&info);
 		if (err) {
 			ubi_free_vid_hdr(ubi, vid_hdr);
+			printk("error on ubi_crypto_cipher : %d\n",err);
 			SAFE_FREE(buf);
 			return err;
 		}
@@ -926,7 +931,7 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
 	uint32_t crc;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
-	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+	struct ubi_crypto_cipher_info info = {.ubi = ubi,
                                            .src = buf,
                                            .len = len,
                                            .offset = 0
@@ -1187,7 +1192,7 @@ int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 	uint32_t crc;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
-	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+	struct ubi_crypto_cipher_info info = {.ubi = ubi,
                                            .len = len,
 	                                       .src = buf,
 	                                       .offset = 0
@@ -1370,7 +1375,7 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 	uint32_t crc;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	void *crypt = NULL;
-	struct ubi_crypto_cipher_info info = {.ubi_dev = ubi->ubi_num,
+	struct ubi_crypto_cipher_info info = {.ubi = ubi,
                                            .vid_hdr = vid_hdr,
                                            .offset = 0
                                           };

@@ -624,13 +624,16 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	int err = -ENODATA;
 	unsigned int comp_len = 0;
 	u = ubi_cru_acquire_unit(&ubi_cru_upool);
-	mutex_lock(&u->hmac.mutex);
-	comp_len = crypto_hash_digestsize((struct crypto_hash*)u->hmac.tfm);
-	comp_len = min(comp_len, sizeof(hmac_hdr->htag));
 	if (BAD_PTR(u)) {
+		printk("%s - Failed to acquire crypto unit from the pool : %ld\n", __func__, PTR_ERR(u));
 		err = PTR_ERR(u);
 		goto exit;
 	}
+	mutex_lock(&u->hmac.mutex);
+	comp_len = crypto_hash_digestsize((struct crypto_hash*)u->hmac.tfm);
+	comp_len = min(comp_len, sizeof(hmac_hdr->htag));
+
+	printk("%s - Comparison length for probing keys : %d\n", __func__, comp_len);
 
 	list_for_each_entry(key, &kentry->key_ring, entry) {
 		ubi_kmgr_get_key(key);
@@ -641,6 +644,7 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 			ubi_kmgr_put_key(key);
 			break;
 		}
+
 		if (!memcmp(hmac_tag, hmac_hdr->htag, comp_len)) {
 			ubi_kval_insert(&key->val_tree, lnum, lnum);
 			ubi_kval_remove(&kentry->unknown, lnum, lnum);
@@ -695,13 +699,21 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	}
 	lnum = be32_to_cpu(vid_hdr->lnum);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (!kentry->tagged) {
+		return kentry->main;
+	}
+
 	down_read(&kentry->kr_sem);
 	list_for_each_entry(key, &kentry->key_ring, entry) {
+		printk("%s - Checking key val tree :\n", __func__);
 		if (ubi_kval_is_in_tree(&key->val_tree, lnum)) {
 			up_read(&kentry->kr_sem);
 			return key;
 		}
 	}
+
+	printk("%s - Key ring checked, target not found ...\n"
+			"Checking unknown LEB tree ...\n", __func__);
 
 	if (!ubi_kval_is_in_tree(&kentry->unknown, lnum) ||
 			probe) {
@@ -710,12 +722,17 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 //			ubi_kval_clear_tree(&kentry->unknown);
 //			kentry->unknown.dying = 0;
 //		}
+		printk("%s - The LEB was not found in the unknown tree\n", __func__);
 		key = ubi_kmgr_probe_leb_key(hmac_hdr, vid_hdr, pnum, kentry);
 		if (BAD_PTR(key)) {
 			ubi_kval_insert(&kentry->unknown, lnum, lnum);
+		} else {
+			ubi_kval_remove(&kentry->unknown, lnum, lnum);
+			ubi_kval_insert(&key->val_tree, lnum, lnum);
 		}
 	} else {
 		key = ERR_PTR(-ENODATA);
+		ubi_kval_insert(&kentry->unknown, lnum, lnum);
 	}
 	up_read(&kentry->kr_sem);
 #else
@@ -893,15 +910,24 @@ int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 				 * -> kentry->main will always point to that key
 				 */
 				key = kentry->main;
+				if (BAD_PTR(key)) {
+					mutex_unlock(&kentry->mutex);
+					ubi_kmgr_put_kentry(kentry);
+					return -ENODATA;
+				}
 #else
 		key = &kentry->cur;
 #endif // CONFIG_UBI_CRYPTO_HMAC
 		if ((1 < kentry->in_use)) {
 			err = -EBUSY;
 		} else {
-			if (NULL == k || 0 == len) {
+			if (BAD_PTR(k) || 0 == len) {
 				/* We want to unset the current key. */
-				memset(key, 0, sizeof(*key));
+				if(!BAD_PTR(key->key)) {
+					kfree(key->key);
+				}
+				key->key = NULL;
+				key->key_len = 0;
 			}
 			else {
 				if (NULL ==

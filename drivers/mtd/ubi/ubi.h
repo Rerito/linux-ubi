@@ -1010,8 +1010,12 @@ static inline void ubi_free_hmac_hdr(const struct ubi_device *ubi,
 static inline int ubi_io_read_data(struct ubi_device *ubi, void *buf,
 				    int pnum, int offset, int len)
 {
-	int leb_start = (ubi->hmac) ? ubi->hmac_leb_start
-			               : ubi->leb_start;
+	int leb_start;
+	if (ubi->hmac) {
+		leb_start = ubi->hmac_leb_start;
+	} else {
+		leb_start = ubi->leb_start;
+	}
 	ubi_assert(offset >= 0);
 	return ubi_io_read(ubi, buf, pnum,
 			offset + leb_start,
@@ -1035,9 +1039,14 @@ static inline int ubi_io_read_data(const struct ubi_device *ubi, void *buf,
 static inline int ubi_io_write_data(struct ubi_device *ubi, const void *buf,
 				    int pnum, int offset, int len)
 {
-	int leb_start = (ubi->hmac) ? ubi->hmac_leb_start
-			               : ubi->leb_start;
+	int leb_start;
+	if (ubi->hmac) {
+		leb_start = ubi->hmac_leb_start;
+	} else {
+		leb_start = ubi->leb_start;
+	}
 	ubi_assert(offset >= 0);
+	printk("offset is incremented by %d (%d)\n", leb_start, ubi->hmac);
 	return ubi_io_write(ubi, buf, pnum,
 			offset + leb_start,
 			len);

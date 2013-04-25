@@ -66,6 +66,7 @@ struct ubi_crypto_unit *ubi_cru_alloc_unit(void)
 		err = PTR_ERR(p->hmac.tfm);
 		goto exit;
 	}
+	printk("Successfully allocated HMAC transform object.\n");
 	mutex_init(&p->hmac.mutex);
 #endif
 	mutex_init(&p->mutex);

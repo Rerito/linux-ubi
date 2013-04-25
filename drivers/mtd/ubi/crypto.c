@@ -403,21 +403,27 @@ static int __ubi_crypto_cipher(void *src, void *dst, size_t len, int offset,
 int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 {
 	int err = 0;
+	int ubi_dev = 0, vol_id = 0;
 	struct ubi_key_entry *k = NULL;
 	struct ubi_key *key = NULL;
 	struct ubi_key_tree *tree = NULL;
+	struct ubi_volume *vol;
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	struct ubi_hmac_hdr *hmac_hdr = NULL;
 #endif // CONFIG_UBI_CRYPTO_HMAC
 	__u8 *iv = NULL;
-	if (BAD_PTR(info->vid_hdr)) {
+	if (BAD_PTR(info->vid_hdr) ||
+			BAD_PTR(info->ubi)) {
 		return -EINVAL;
 	}
+	vol_id = be32_to_cpu(info->vid_hdr->vol_id);
+	ubi_dev = info->ubi->ubi_num;
+	vol = info->ubi->volumes[vol_id2idx(info->ubi, vol_id)];
 	dbg_crypto("len : %u | vol_id : %u | LEB : %u off : %d | sqnum : %llu\n",
 			info->len, be32_to_cpu(info->vid_hdr->vol_id),
 			be32_to_cpu(info->vid_hdr->lnum), info->offset,
 			be64_to_cpu(info->vid_hdr->sqnum));
-	if (0 > info->ubi_dev || UBI_MAX_DEVICES < info->ubi_dev) {
+	if (0 > ubi_dev || UBI_MAX_DEVICES < ubi_dev) {
 		err = -EINVAL;
 		goto exit;
 	}
@@ -429,17 +435,17 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	 * we also have to figure out which key
 	 * has to be used for the current LEB.
 	 */
-	tree = ubi_kmgr_get_tree(info->ubi_dev);
+	tree = ubi_kmgr_get_tree(ubi_dev);
 	if (BAD_PTR(tree)) {
 		err = PTR_ERR(tree);
 		goto exit;
 	}
-	k = ubi_kmgr_get_kentry(tree, info->vid_hdr->vol_id);
 	/*
 	 * FIXME : When HMAC support will be deployed,
 	 * We must determine which key has to be used.
 	 */
 #ifndef CONFIG_UBI_CRYPTO_HMAC
+	k = ubi_kmgr_get_kentry(tree, info->vid_hdr->vol_id);
 	if (BAD_PTR(k) || 0 == k->cur.key_len || NULL == k->cur.key) {
 		if (likely(!((info->dst < info->src + info->len) &&
 				(info->dst + info->len > info->src)))) {
@@ -450,7 +456,16 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	}
 	key = &k->cur;
 #else
-	if (BAD_PTR(k)) {
+	while (BAD_PTR(k)) {
+		struct ubi_kmgr_set_vol_key_req req = {
+				.vol_id = info->vid_hdr->vol_id,
+				.vol = vol,
+				.tagged = info->vid_hdr->hmac_hdr_offset,
+				.key = {.k = NULL, .len = 0},
+				.main = 1
+		};
+		k = ubi_kmgr_get_kentry(tree, info->vid_hdr->vol_id);
+
 		/*
 		 * If k = NULL there is no registered key entry, but we want
 		 * to have LEB key information in interval trees, so we
@@ -458,23 +473,20 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 		 *
 		 * This is a bit inelegant and should be changed
 		 */
-		struct ubi_kmgr_set_vol_key_req req = {
-				.vol_id = info->vid_hdr->vol_id,
-				.vol = info->vid_hdr,
-				.tagged = info->vid_hdr->hmac_hdr_offset,
-				.key = {.k = NULL, .len = 0},
-				.main = 1
-		};
-		if ((err = PTR_ERR(k)))
+		if (IS_ERR(k)) {
+			err = PTR_ERR(k);
 			goto exit;
+		} else if (NULL == k) {
+			err = ubi_kmgr_setvolkey(tree, &req);
+			if (err) {
+				dbg_crypto("An error occured while initializing an empty kentry");
+				goto exit;
+			} else {
 
-		err = ubi_kmgr_setvolkey(tree, &req);
-		if (err) {
-			dbg_crypto("An error occured while initializing an empty kentry");
-			goto exit;
+			}
 		}
-
 	}
+	printk("%s - We got the kentry !\n", __func__);
 	key = ubi_kmgr_get_leb_key(info->hmac_hdr, info->vid_hdr,
 			info->pnum, k, 1);
 	if (BAD_PTR(key)) {
