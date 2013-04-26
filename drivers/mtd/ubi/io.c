@@ -104,6 +104,7 @@ static int self_check_write(struct ubi_device *ubi, const void *buf, int pnum,
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 static int self_check_hmac_hdr(const struct ubi_device *ubi, int pnum,
 		struct ubi_hmac_hdr *hmac_hdr);
+static int self_check_peb_hmac_hdr(const struct ubi_device *ubi, int pnum);
 #endif // CONFIG_UBI_CRYPTO_HMAC
 
 /**
@@ -275,6 +276,13 @@ int ubi_io_write(struct ubi_device *ubi, const void *buf, int pnum, int offset,
 		err = self_check_peb_vid_hdr(ubi, pnum);
 		if (err)
 			return err;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		if (ubi->hmac) {
+			err = self_check_peb_hmac_hdr(ubi, pnum);
+			if (err)
+				return err;
+		}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	}
 
 	if (ubi_dbg_is_write_failure(ubi)) {

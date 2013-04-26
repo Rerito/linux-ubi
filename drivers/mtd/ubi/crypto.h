@@ -61,6 +61,9 @@ inline int ubi_crypto_decipher(struct ubi_crypto_cipher_info *info);
 u8 *ubi_crypto_compute_hash(struct ubi_crypto_unit *unit,
 		struct ubi_key *key, struct ubi_vid_hdr *vid_hdr, __be32 pnum,
 		u8 *data, unsigned int len);
+int ubi_crypto_compute_hmac_hdr(struct ubi_device *ubi,
+		struct ubi_hmac_hdr *hmac_hdr, struct ubi_vid_hdr *vid_hdr,
+		int pnum, u8 *data, unsigned int len);
 #endif // CONFIG_UBI_CRYPTO_HMAC
 
 void ubi_crypto_init(void);

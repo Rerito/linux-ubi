@@ -408,9 +408,6 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	struct ubi_key *key = NULL;
 	struct ubi_key_tree *tree = NULL;
 	struct ubi_volume *vol;
-#ifdef CONFIG_UBI_CRYPTO_HMAC
-	struct ubi_hmac_hdr *hmac_hdr = NULL;
-#endif // CONFIG_UBI_CRYPTO_HMAC
 	__u8 *iv = NULL;
 	if (BAD_PTR(info->vid_hdr) ||
 			BAD_PTR(info->ubi)) {
@@ -566,6 +563,138 @@ inline int ubi_crypto_decipher(struct ubi_crypto_cipher_info *info)
 {
 	return ubi_crypto_cipher(info);
 }
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+/**
+ * ubi_crypto_compute_hmac_hdr - Fills the HMAC tags of a HMAC header
+ * @ubi: The ubi device
+ * @hmac_hdr: The header to fill
+ * @vid_hdr: The VID header of the targeted LEB
+ * @data: The data that is about to be written
+ * @len: The length of @data
+ *
+ * This function will be called when a HMAC header
+ * will have to be written on the flash (mapping of a new LEB
+ * with data, copy of LEB ...).
+ *
+ * Depending on the context, @data may be %NULL. If so, set
+ * @len to %0 for the sake of consistency (otherwise the function
+ * returns %EINVAL).
+ *
+ * It fills the HMAC tags in @hmac_hdr according to the
+ * LEB <-> PEB mapping and does not touch the remaining fields
+ * of the structure.
+ *
+ * First, the function searches for the suitable cryptographic key
+ * through @ubi_kmgr_get_leb. If that fails, that means the LEB was
+ * not mapped before the call to this function. Since this function
+ * is called only when something is about to be written on the flash
+ * the function retrieves the key registered as the main key for the volume.
+ *
+ * Possible error values :
+ * %ENOMEM: Could not allocate the required resources.
+ * %EINVAL: One of the parameters was invalid
+ *
+ */
+int ubi_crypto_compute_hmac_hdr(struct ubi_device *ubi,
+		struct ubi_hmac_hdr *hmac_hdr, struct ubi_vid_hdr *vid_hdr,
+		int pnum, u8 *data, unsigned int len) {
+	int err = 0;
+	unsigned int shift = 0, tag_len = 0;
+	u32 lnum = 0;
+	u8 *hmac = NULL, *dest = NULL;
+	__be32 be_pnum = cpu_to_be32(pnum);
+	struct ubi_key *key = NULL;
+	struct ubi_key_tree *tree = NULL;
+	struct ubi_key_entry *kentry = NULL;
+	struct ubi_crypto_unit *u = NULL;
+
+	if (BAD_PTR(hmac_hdr) || BAD_PTR(vid_hdr)
+		|| (BAD_PTR(data) && len))
+		return -EINVAL;
+	shift = ubi->hmac_leb_size/2;
+	lnum = be32_to_cpu(vid_hdr->lnum);
+	len = min(len, (unsigned int)ubi->hmac_leb_size);
+	tree = ubi_kmgr_get_tree(ubi->ubi_num);
+	kentry = ubi_kmgr_get_kentry(tree, vid_hdr->vol_id);
+	if (BAD_PTR(kentry)) {
+		err = PTR_ERR(kentry);
+		goto exit;
+	}
+	key = ubi_kmgr_get_leb_key(NULL, vid_hdr, pnum, kentry, 0);
+	if (BAD_PTR(key)) {
+		if (-ENODATA == (err = PTR_ERR(key))) {
+			/*
+			 * If the LEB is not registered in any key,
+			 * We can still try out with the main key.
+			 * This function will only be called when about
+			 * to write something to the flash. In this case,
+			 * if the key is not found, it's because the LEB
+			 * was not on the flash before, thus we use the mainkey.
+			 */
+			key = ubi_kmgr_get_mainkey(kentry);
+			if (-ENODATA == (err = PTR_ERR(key))) {
+				goto exit;
+			}
+			ubi_kval_insert(&key->val_tree, lnum, lnum);
+		} else {
+			goto exit;
+		}
+	}
+
+	hmac = ubi_crypto_compute_hash(u, key, vid_hdr,
+			be_pnum, NULL, 0);
+	if (BAD_PTR(hmac)) {
+		err = PTR_ERR(hmac);
+		goto exit;
+	}
+	kfree(hmac);
+	memcpy(hmac_hdr->htag, hmac, sizeof(hmac_hdr->htag));
+	hmac_hdr->data_len = cpu_to_be32(len);
+	dest = hmac_hdr->top_hmac;
+	tag_len = sizeof(hmac_hdr->top_hmac);
+	/*
+	 * Too lazy to write twice the same thing ...
+	 * I exploited the __attribute__((packed)) of
+	 * hmac_hdr structure to simply compute the two tags
+	 *
+	 * Please note that this would have to be edited if
+	 * the structure was to be modified.
+	 */
+	while (len) {
+		if (shift > len) {
+			shift = len;
+		}
+		hmac = ubi_crypto_compute_hash(u, key, vid_hdr,
+				be_pnum, data, shift);
+		if (BAD_PTR(hmac)) {
+			err = PTR_ERR(hmac);
+			break;
+		}
+		memcpy(dest, hmac, tag_len);
+		dest += tag_len;
+		data += shift;
+		len -= shift;
+		kfree(hmac);
+	}
+	/*
+	 * We don't care about the CRC nor the magic number
+	 * as they will be appended by default when the header
+	 * will be written on the flash.
+	 */
+	exit:
+	if (!BAD_PTR(u)) {
+		ubi_cru_put_unit(u, &ubi_cru_upool);
+	}
+	if (!BAD_PTR(key)) {
+		ubi_kmgr_put_key(key);
+	}
+	if (!BAD_PTR(kentry)) {
+		ubi_kmgr_put_kentry(kentry);
+	}
+	ubi_kmgr_put_tree(tree);
+	return err;
+}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 /**
  * ubi_crypto_init - Initialize the UBI cryptographic engine

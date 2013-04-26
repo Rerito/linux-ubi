@@ -131,6 +131,9 @@ struct ubi_kmgr_set_vol_key_req {
 extern struct ubi_key_tree ubi_kmgr_ktree[UBI_MAX_DEVICES];
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
+inline struct ubi_key *ubi_kmgr_get_key(struct ubi_key *k);
+inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k);
+
 typedef int (*ubi_kmgr_key_lu_func)(struct ubi_key*,
 		void*);
 
@@ -150,10 +153,14 @@ void ubi_kmgr_put_kentry(struct ubi_key_entry *kentry);
 
 int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 		struct ubi_kmgr_set_vol_key_req *req);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
 struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 		struct ubi_vid_hdr *vid_hdr, int pnum,
 		struct ubi_key_entry *kentry,
 		int probe);
+#endif // CONFIG_UBI_CRYPTO_HMAC
+struct ubi_key *ubi_kmgr_get_mainkey(struct ubi_key_entry *kentry);
+
 void ubi_kmgr_ack_update(struct ubi_key_entry *kentry);
 
 struct ubi_key_tree *ubi_kmgr_get_tree(int ubi_dev);

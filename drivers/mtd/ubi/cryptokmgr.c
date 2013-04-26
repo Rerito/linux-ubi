@@ -47,8 +47,6 @@ static struct ubi_key_entry *ubi_kmgr_alloc_kentry(__be32 vid,
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 static inline struct ubi_key *ubi_kmgr_upd_key_refc(
 		struct ubi_key *k, int inc);
-static inline struct ubi_key *ubi_kmgr_get_key(struct ubi_key *k);
-static inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k);
 static void ubi_kmgr_free_key(struct ubi_key *key);
 static void ubi_kmgr_free_keyring(struct list_head *head);
 static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
@@ -386,12 +384,12 @@ static inline struct ubi_key *ubi_kmgr_upd_key_refc(struct ubi_key *k,
 	return k;
 }
 
-static inline struct ubi_key *ubi_kmgr_get_key(struct ubi_key *k)
+inline struct ubi_key *ubi_kmgr_get_key(struct ubi_key *k)
 {
 	return ubi_kmgr_upd_key_refc(k, 1);
 }
 
-static inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k)
+inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k)
 {
 	return ubi_kmgr_upd_key_refc(k, 0);
 }
@@ -623,6 +621,10 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	struct ubi_crypto_unit *u = NULL;
 	int err = -ENODATA;
 	unsigned int comp_len = 0;
+	if (BAD_PTR(hmac_hdr)) {
+		err = -EINVAL;
+		goto exit;
+	}
 	u = ubi_cru_acquire_unit(&ubi_cru_upool);
 	if (BAD_PTR(u)) {
 		printk("%s - Failed to acquire crypto unit from the pool : %ld\n", __func__, PTR_ERR(u));
@@ -700,9 +702,8 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	lnum = be32_to_cpu(vid_hdr->lnum);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 	if (!kentry->tagged) {
-		return kentry->main;
+		return ubi_kmgr_get_mainkey(kentry);
 	}
-
 	down_read(&kentry->kr_sem);
 	list_for_each_entry(key, &kentry->key_ring, entry) {
 		printk("%s - Checking key val tree :\n", __func__);
@@ -715,14 +716,14 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	printk("%s - Key ring checked, target not found ...\n"
 			"Checking unknown LEB tree ...\n", __func__);
 
-	if (!ubi_kval_is_in_tree(&kentry->unknown, lnum) ||
-			probe) {
+	if (probe) {
 //		if (kentry->upd) {
 //			ubi_kmgr_ack_update(kentry);
 //			ubi_kval_clear_tree(&kentry->unknown);
 //			kentry->unknown.dying = 0;
 //		}
-		printk("%s - The LEB was not found in the unknown tree\n", __func__);
+		printk("%s - The LEB is not registered in any key domain"
+				"... Probing\n", __func__);
 		key = ubi_kmgr_probe_leb_key(hmac_hdr, vid_hdr, pnum, kentry);
 		if (BAD_PTR(key)) {
 			ubi_kval_insert(&kentry->unknown, lnum, lnum);
