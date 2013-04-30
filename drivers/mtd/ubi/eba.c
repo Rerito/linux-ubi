@@ -586,6 +586,9 @@ static int recover_peb(struct ubi_device *ubi, int pnum, int vol_id, int lnum,
 	                                      .offset = offset,
 	                                      .dst = buf
 	                                     };
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	struct ubi_hmac_hdr *hmac_hdr = NULL;
+#endif
 #endif
 	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
 	if (!vid_hdr)
@@ -606,6 +609,19 @@ retry:
 			err = -EIO;
 		goto out_put;
 	}
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi->hmac) {
+		hmac_hdr = ubi_zalloc_hmac_hdr(ubi, GFP_NOFS);
+		if (!hmac_hdr) {
+			err = -ENOMEM;
+			goto out_put;
+		}
+		err = ubi_io_read_hmac_hdr(ubi, pnum, hmac_hdr, 1);
+		if (err) {
+			goto out_put;
+		}
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	old_sqnum = vid_hdr->sqnum;
 #endif
@@ -619,6 +635,7 @@ retry:
 	memset(ubi->peb_buf + offset, 0xFF, len);
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	info.vid_hdr = vid_hdr;
+	info.hmac_hdr = hmac_hdr;
 	info.len = len;
 	info.src = buf;
 	info.dst = ubi->peb_buf + offset;
@@ -639,7 +656,6 @@ retry:
 			}
 		}
 		if (!crypt) {
-			ubi_free_vid_hdr(ubi, vid_hdr);
 			err = -ENOMEM;
 			goto out_unlock;
 		}
@@ -660,15 +676,21 @@ retry:
 	info.src = crypt;
 	info.dst = ubi->peb_buf;
 	err = ubi_crypto_decipher(&info);
-	if (err && -ENODATA != err) {
+	if (err) {
 		goto out_unlock;
 	}
 	vid_hdr->sqnum = new_sqnum;
 	info.src = ubi->peb_buf;
 	info.pnum = new_pnum;
-
+	err = ubi_crypto_compute_hmac_hdr(
+			ubi, hmac_hdr, vid_hdr, new_pnum,
+			ubi->peb_buf, data_size
+			);
+	if (err) {
+		goto out_unlock;
+	}
 	err = ubi_crypto_cipher(&info);
-	if (err && -ENODATA != err) {
+	if (err) {
 		goto out_unlock;
 	}
 
@@ -702,6 +724,10 @@ out_unlock:
 out_put:
 	ubi_wl_put_peb(ubi, vol_id, lnum, new_pnum, 1);
 	ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (!hmac_hdr)
+		ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif
 #ifdef CONFIG_UBI_MTD_CRYPTO
 	SAFE_FREE(crypt);
 #endif
@@ -743,7 +769,6 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 		      const void *buf, int offset, int len)
 {
 	int err, pnum, tries = 0, vol_id = vol->vol_id;
-	int i;
 	struct ubi_vid_hdr *vid_hdr;
 #ifdef CONFIG_MTD_UBI_CRYPTO
 #ifdef CONFIG_UBI_CRYPTO_HMAC
@@ -858,7 +883,7 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 			return -ENOMEM;
 		}
 	}
-#endif CONFIG_UBI_CRYPTO_HMAC
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 retry:
 	pnum = ubi_wl_get_peb(ubi);
@@ -1654,6 +1679,7 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 		crc = crc32(UBI_CRC32_INIT, crypt, data_size);
 		cond_resched();
 	}
+
 	err = ubi_crypto_compute_hmac_hdr(
 			ubi, info.hmac_hdr, vid_hdr, to,
 			ubi->peb_buf, data_size
