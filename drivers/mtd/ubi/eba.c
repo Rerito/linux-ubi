@@ -1040,9 +1040,13 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
 	struct ubi_crypto_cipher_info info = {.ubi = ubi,
                                            .src = buf,
                                            .len = len,
-                                           .offset = 0
+                                           .offset = 0,
+                                           .hmac_hdr = NULL
                                           };
-#endif
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	struct ubi_hmac_hdr *hmac_hdr = NULL;
+#endif // CONFIG_UBI_CRYPTO_HMAC
+#endif // CONFIG_MTD_UBI_CRYPTO
 	if (ubi->ro_mode)
 		return -EROFS;
 
@@ -1056,9 +1060,23 @@ int ubi_eba_write_leb_st(struct ubi_device *ubi, struct ubi_volume *vol,
 	if (!vid_hdr)
 		return -ENOMEM;
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi->hmac) {
+		hmac_hdr = ubi_zalloc_hmac_hdr(ubi, GFP_NOFS);
+		if (!hmac_hdr) {
+			ubi_free_vid_hdr(ubi, vid_hdr);
+			return -ENOMEM;
+		}
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
+
 	err = leb_write_lock(ubi, vol_id, lnum);
 	if (err) {
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		if (hmac_hdr)
+			ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		return err;
 	}
 
@@ -1094,6 +1112,10 @@ retry:
 	pnum = ubi_wl_get_peb(ubi);
 	if (pnum < 0) {
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		if (hmac_hdr)
+			ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		leb_write_unlock(ubi, vol_id, lnum);
 #ifdef CONFIG_MTD_UBI_CRYPTO
 		SAFE_FREE(crypt);
@@ -1108,11 +1130,31 @@ retry:
 		dbg_eba("Error while ciphering the data : %d", err);
 		leb_write_unlock(ubi, vol_id, lnum);
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		if (hmac_hdr)
+			ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		SAFE_FREE(crypt);
 		return err;
 	}
 	crc = crc32(UBI_CRC32_INIT, crypt, data_size);
 	vid_hdr->data_crc = cpu_to_be32(crc);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi->hmac) {
+		err = ubi_crypto_compute_hmac_hdr(
+				ubi, hmac_hdr, vid_hdr,
+				pnum, buf, len);
+		if (err) {
+			dbg_eba("Error while computing the HMAC header : %d",
+					err);
+			leb_write_unlock(ubi, vol_id, lnum);
+			ubi_free_vid_hdr(ubi, vid_hdr);
+			ubi_free_hmac_hdr(ubi, hmac_hdr);
+			SAFE_FREE(crypt);
+			return err;
+		}
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 #endif // CONFIG_MTD_UBI_CRYPTO
 	dbg_eba("write VID hdr and %d bytes at LEB %d:%d, PEB %d, used_ebs %d",
 		len, vol_id, lnum, pnum, used_ebs);
@@ -1124,6 +1166,16 @@ retry:
 		goto write_error;
 	}
 
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi->hmac) {
+		err = ubi_io_write_hmac_hdr(ubi, pnum, hmac_hdr);
+		if (err) {
+			ubi_warn("failed to write HMAC hdr to LEB %d:%d, PEB %d",
+				vol_id, lnum, pnum);
+			goto write_error;
+		}
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	err = ubi_io_write_data(ubi, buf, pnum, 0, len);
 	if (err) {
 		ubi_warn("failed to write %d bytes of data to PEB %d",
@@ -1138,6 +1190,10 @@ retry:
 
 	leb_write_unlock(ubi, vol_id, lnum);
 	ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (hmac_hdr)
+		ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	SAFE_FREE(crypt);
 #endif // CONFIG_MTD_UBI_CRYPTO
@@ -1152,6 +1208,13 @@ write_error:
 		 */
 		ubi_ro_mode(ubi);
 		leb_write_unlock(ubi, vol_id, lnum);
+#ifdef CONFIG_MTD_UBI_CRYPTO
+		SAFE_FREE(crypt);
+#endif // CONFIG_MTD_UBI_CRYPTO
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		if (hmac_hdr)
+			ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		return err;
 	}
@@ -1161,6 +1224,10 @@ write_error:
 		ubi_ro_mode(ubi);
 		leb_write_unlock(ubi, vol_id, lnum);
 		ubi_free_vid_hdr(ubi, vid_hdr);
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		if (hmac_hdr)
+			ubi_free_hmac_hdr(ubi, hmac_hdr);
+#endif // CONFIG_UBI_CRYPTO_HMAC
 #ifdef CONFIG_MTD_UBI_CRYPTO
 		SAFE_FREE(crypt);
 #endif // CONFIG_MTD_UBI_CRYPTO
