@@ -640,7 +640,13 @@ int ubi_crypto_compute_hmac_hdr(struct ubi_device *ubi,
 			goto exit;
 		}
 	}
-
+	u = ubi_cru_acquire_unit(&ubi_cru_upool);
+	if (BAD_PTR(u)) {
+		err = PTR_ERR(u);
+		dbg_crypto("Error acquiring unit for HMAC computing : %d",
+				err);
+		goto exit;
+	}
 	hmac = ubi_crypto_compute_hash(u, key, vid_hdr,
 			be_pnum, NULL, 0);
 	if (BAD_PTR(hmac)) {
