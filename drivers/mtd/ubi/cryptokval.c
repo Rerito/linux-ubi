@@ -18,7 +18,7 @@ static inline struct ubi_kval_lookup_entry*
 ubi_kval_alloc_lu_entry(struct ubi_kval_node *node)
 {
 	struct ubi_kval_lookup_entry *e = NULL;
-	if (NULL == (e = kmalloc(sizeof(*e), GFP_KERNEL))) {
+	if (NULL == (e = kzalloc(sizeof(*e), GFP_KERNEL))) {
 		return ERR_PTR(-ENOMEM);
 	}
 	e->node = node;
@@ -233,13 +233,14 @@ int ubi_kval_insert(struct ubi_kval_tree *tree, u32 d, u32 u)
 int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 {
 	int err = 0;
+	u32 tmp_i = 0;
 	struct rb_node *n;
 	struct ubi_kval_node *node;
 	struct ubi_kval_lookup_entry *e, *tmp;
 	LIST_HEAD(del_list);
 	LIST_HEAD(lu_list);
 
-	if (BAD_PTR(tree)) {
+	if (BAD_PTR(tree) && d > u) {
 		return -EINVAL;
 	}
 
@@ -262,14 +263,43 @@ int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 				struct ubi_kval_lookup_entry,
 				entry);
 		node = e->node;
+		list_del(&e->entry);
+		kfree(e);
 
-		if ((d <= node->u) &&
-			(u >= node->d)) {
+		if (d <= node->d) {
+			tmp = ubi_kval_alloc_lu_entry(
+					rb_entry(node->node.rb_left,
+					struct ubi_kval_node, node));
+			if (BAD_PTR(tmp)) {
+				err = PTR_ERR(tmp);
+				goto exit;
+			}
+			list_add(&tmp->entry, &lu_list);
+		}
+		if (u >= node->u) {
+			tmp = ubi_kval_alloc_lu_entry(
+					rb_entry(node->node.rb_right,
+					struct ubi_kval_node, node));
+			if (BAD_PTR(tmp)) {
+				err = PTR_ERR(tmp);
+				goto exit;
+			}
+			list_add(&tmp->entry, &lu_list);
+		}
+
+		if ((d <= node->u) && (u >= node->d)) {
 			/* Overlap ! */
-			if ((u >= node->u) &&
-				(d <= node->d)) {
+			if ((u >= node->u) && (d <= node->d)) {
 				/* We must delete the current node */
-
+				rb_erase(&node->node, &tree->root);
+			} else if ((d <= node->d) && (u >= node->d)) {
+				tmp_i = u;
+				u = node->d;
+				node->d = tmp_i;
+			} else if ((d <= node->u) && (u >= node->u)) {
+				tmp_i = d;
+				d = node->u;
+				node->u = tmp_i;
 			}
 		}
 	}
@@ -334,11 +364,18 @@ struct ubi_kval_node *ubi_kval_get_rightmost(struct ubi_kval_tree *tree)
 	if (BAD_PTR(tree)) {
 		return ERR_PTR(-EINVAL);
 	}
+	down_read(&tree->sem);
+	if (tree->dying) {
+		rmost = ERR_PTR(-EACCES);
+		goto exit;
+	}
 	n = tree->root.rb_node;
 	while (NULL != n) {
 		rmost = rb_entry(n, struct ubi_kval_node, node);
 		n = n->rb_right;
 	}
+	exit:
+	up_read(&tree->sem);
 	return rmost;
 }
 
