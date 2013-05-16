@@ -292,6 +292,26 @@ int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 			if ((u >= node->u) && (d <= node->d)) {
 				/* We must delete the current node */
 				rb_erase(&node->node, &tree->root);
+			} else if ((u < node->u) && (d > node->d)) {
+				/* We must delete the current node and add
+				 * [node->d, d] and [node->u, u] nodes
+				 */
+				u32 d2 = node->d, u2 = node->u;
+				rb_erase(&node->node, &tree->root);
+				err = ubi_kval_insert_unlocked(tree, d2, d);
+				if (err) {
+					printk("Error inserting \"leftover\""
+							"node while removing [%u, %u] : %d",
+							d, u, err);
+					goto exit;
+				}
+				err = ubi_kval_insert_unlocked(tree, u, u2);
+				if (err) {
+					printk("Error inserting \"leftover\""
+							"node while removing [%u, %u] : %d",
+							d, u, err);
+					goto exit;
+				}
 			} else if ((d <= node->d) && (u >= node->d)) {
 				tmp_i = u;
 				u = node->d;
