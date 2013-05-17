@@ -190,6 +190,7 @@
 /* Set (or unset) an UBI volume cryptographic key */
 #define UBI_IOCSETVOLKEY _IOW(UBI_VOL_IOC_MAGIC, 7, \
 				struct ubi_set_vol_key_req)
+#define UBI_AES_KEY_SIZE 16
 
 /* Maximum MTD device name length supported by UBI */
 #define MAX_UBI_MTD_NAME_LEN 127

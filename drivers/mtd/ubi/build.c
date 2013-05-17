@@ -1251,7 +1251,7 @@ static void __exit ubi_exit(void)
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	ubi_crypto_term();
 #endif // CONFIG_MTD_UBI_CRYPTO
-s}
+}
 module_exit(ubi_exit);
 
 /**

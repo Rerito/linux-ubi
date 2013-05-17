@@ -595,12 +595,12 @@ retry:
 
 	data_size = offset + len;
 	mutex_lock(&ubi->buf_mutex);
-	memset(ubi->peb_buf + offset, 0xFF, len);
+	memset(ubi->peb_buf1 + offset, 0xFF, len);
 #ifdef CONFIG_MTD_UBI_CRYPTO
 	info.vid_hdr = vid_hdr;
 	info.len = len;
 	info.src = buf;
-	info.dst = ubi->peb_buf + offset;
+	info.dst = ubi->peb_buf1 + offset;
 	info.pnum = new_pnum;
 	err = ubi_crypto_cipher(&info);
 	if (err && -ENODATA != err) {
@@ -624,7 +624,7 @@ retry:
 		}
 		err = ubi_io_read_data(ubi, crypt, pnum, 0, offset);
 #else
-		err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, offset);
+		err = ubi_io_read_data(ubi, ubi->peb_buf1, pnum, 0, offset);
 #endif
 		if (err && err != UBI_IO_BITFLIPS)
 			goto out_unlock;
@@ -637,13 +637,13 @@ retry:
 	info.offset = 0;
 	info.len = offset;
 	info.src = crypt;
-	info.dst = ubi->peb_buf;
+	info.dst = ubi->peb_buf1;
 	err = ubi_crypto_decipher(&info);
 	if (err && -ENODATA != err) {
 		goto out_unlock;
 	}
 	vid_hdr->sqnum = new_sqnum;
-	info.src = ubi->peb_buf;
+	info.src = ubi->peb_buf1;
 	info.pnum = new_pnum;
 
 	err = ubi_crypto_cipher(&info);
@@ -1383,27 +1383,27 @@ int ubi_eba_copy_leb(struct ubi_device *ubi, int from, int to,
 			crypt = kmalloc(data_size, GFP_NOFS);
 		}
 		if (NULL == crypt) {
-			err = MOVE_RETRY;
+			err = -ENOMEM;
 			goto out_unlock_buf;
 		}
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 
 #endif
 		info.pnum = from;
-		info.src = ubi->peb_buf;
+		info.src = ubi->peb_buf1;
 		info.dst = crypt;
 		info.len = data_size;
 
 		err = ubi_crypto_decipher(&info);
 		if (err) {
-			err = MOVE_TARGET_WR_ERR;
+			err = MOVE_SOURCE_RD_ERR;
 			goto out_unlock_buf;
 		}
 #endif // CONFIG_MTD_UBI_CRYPTO
 	}
 	vid_hdr->sqnum = cpu_to_be64(next_sqnum(ubi));
 #ifdef CONFIG_MTD_UBI_CRYPTO
-	info.dst = ubi->peb_buf;
+	info.dst = ubi->peb_buf1;
 	info.src = crypt;
 	info.pnum = to;
 	if (data_size > 0) {
