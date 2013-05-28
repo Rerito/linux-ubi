@@ -421,6 +421,63 @@ struct ubi_kval_node *ubi_kval_get_rightmost(struct ubi_kval_tree *tree)
 	return rmost;
 }
 
+int ubi_kval_dump_tree(struct ubi_kval_tree *tree)
+{
+	int err = 0;
+	struct ubi_kval_node *node = NULL;
+	struct ubi_kval_lookup_entry *lu_entry = NULL, *next = NULL;
+	LIST_HEAD(stack);
+	if (BAD_PTR(tree)) {
+		return -EINVAL;
+	}
+	printk("+----------------------+\n"
+			"| Interval Tree Dump : |\n"
+			"+----------------------+\n");
+	if (!BAD_PTR(tree->root.rb_node)) {
+		node = rb_entry(
+			tree->root.rb_node,
+			struct ubi_kval_node, node);
+	}
+	while (!list_empty(&stack) || !BAD_PTR(node)) {
+		if (!BAD_PTR(node)) {
+			lu_entry = ubi_kval_alloc_lu_entry(node);
+			if (BAD_PTR(lu_entry)) {
+				break;
+			}
+			list_add(&lu_entry->entry, &stack);
+			if (!BAD_PTR(node->node.rb_left)) {
+				node = rb_entry(
+					node->node.rb_left,
+					struct ubi_kval_node, node);
+			} else {
+				node = NULL;
+			}
+		} else if (!list_empty(&stack)){
+			lu_entry = list_first_entry(&stack,
+				struct ubi_kval_lookup_entry,
+				entry);
+			node = lu_entry->node;
+			list_del(&lu_entry->entry);
+			kfree(lu_entry);
+			/* Dump node here */
+			printk("[ %u , %u ]\n", node->d, node->u);
+			if (!BAD_PTR(node->node.rb_right)) {
+				node = rb_entry(
+					node->node.rb_right,
+					struct ubi_kval_node, node);
+			} else {
+				node = NULL;
+			}
+		}
+	}
+	/* Free remaining elements in stack here */
+	list_for_each_entry_safe(lu_entry, next, &stack, entry) {
+		kfree(lu_entry);
+	}
+	printk("========================\n\n");
+	return err;
+}
+
 int ubi_kval_init_tree(struct ubi_kval_tree *tree)
 {
 	if (BAD_PTR(tree)) {
