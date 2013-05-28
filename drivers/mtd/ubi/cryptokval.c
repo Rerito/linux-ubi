@@ -88,9 +88,9 @@ static int ubi_kval_insert_no_ovlap(struct ubi_kval_tree *tree, u32 d, u32 u)
  */
 static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 {
-	int err = 0;
-	struct ubi_kval_lookup_entry *entry, *tmp;
-	struct ubi_kval_node *node = NULL;
+	int err = 0, free_cur = 0;
+	struct ubi_kval_lookup_entry *entry = NULL, *tmp = NULL, *e = NULL;
+	struct ubi_kval_node *n = NULL;
 	LIST_HEAD(lookup_list);
 	LIST_HEAD(del_list);
 	if (d > u) {
@@ -98,8 +98,8 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 	}
 
 	if (NULL != tree->root.rb_node) {
-		node = rb_entry(tree->root.rb_node, struct ubi_kval_node, node);
-		entry = ubi_kval_alloc_lu_entry(node);
+		n = rb_entry(tree->root.rb_node, struct ubi_kval_node, node);
+		entry = ubi_kval_alloc_lu_entry(n);
 		if (BAD_PTR(entry)) {
 			err = PTR_ERR(entry);
 			goto exit;
@@ -108,18 +108,19 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 	}
 	while (!list_empty(&lookup_list)) {
 		/* Pop the head of @lookup_list */
-		entry = list_entry(lookup_list.next,
+		entry = list_first_entry(&lookup_list,
 				struct ubi_kval_lookup_entry, entry);
 		list_del(&entry->entry);
-
-		if ((u + 1 >= node->d) &&
-				(d <= node->u + 1)) {
+		n = entry->node;
+		free_cur = 1;
+		if ((u + 1 >= n->d) &&
+				(d <= n->u + 1)) {
 			/*
 			 * The current node overlaps with the inserted interval
 			 */
-			u = max(node->u, u);
-			d = min(node->d, d);
-			if ((u == node->u) && (d == node->d)) {
+			u = max(n->u, u);
+			d = min(n->d, d);
+			if ((u == n->u) && (d == n->d)) {
 				/*
 				 * The requested interval is totally included
 				 * In the current node interval :
@@ -133,10 +134,11 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 				 * We must trigger the current node for deletion.
 				 */
 				list_add(&entry->entry, &del_list);
+				free_cur = 0;
 			}
 		}
 
-		if (u > entry->node->u) {
+		if (u > n->u) {
 			/*
 			 * The upper bound of the inserted interval
 			 * is higher than the current entry upper bound :
@@ -144,47 +146,63 @@ static int ubi_kval_insert_unlocked(struct ubi_kval_tree *tree, u32 d, u32 u)
 			 * sub-tree so we must add the right child of the
 			 * current node to the look up list.
 			 */
-			node = rb_entry(entry->node->node.rb_right,
-					struct ubi_kval_node, node);
-			tmp = ubi_kval_alloc_lu_entry(node);
-			if (BAD_PTR(tmp)) {
-				err = PTR_ERR(tmp);
-				goto exit;
+			if (!BAD_PTR(n->node.rb_right)) {
+				tmp = ubi_kval_alloc_lu_entry(
+					rb_entry(n->node.rb_right,
+					struct ubi_kval_node, node));
+				if (BAD_PTR(tmp)) {
+					err = PTR_ERR(tmp);
+					kfree(entry);
+					goto exit;
+				}
+				list_add(&tmp->entry, &lookup_list);
 			}
-			list_add(&tmp->entry, &lookup_list);
 		}
-		if (d < entry->node->d) {
+		if (d < n->d) {
 			/*
 			 * The lower bound of the current node
 			 * is greater than the inserted interval
 			 * lower bound : there might be overlapping nodes
 			 * in the left sub-tree ...
 			 */
-			node = rb_entry(entry->node->node.rb_left,
-					struct ubi_kval_node, node);
-			tmp = ubi_kval_alloc_lu_entry(node);
-			if (BAD_PTR(tmp)) {
-				err = PTR_ERR(tmp);
-				goto exit;
+			if (!BAD_PTR(n->node.rb_left)) {
+				tmp = ubi_kval_alloc_lu_entry(
+					rb_entry(n->node.rb_left,
+					struct ubi_kval_node, node));
+				if (BAD_PTR(tmp)) {
+					err = PTR_ERR(tmp);
+					kfree(entry);
+					goto exit;
+				}
+				list_add(&tmp->entry, &lookup_list);
 			}
-			list_add(&tmp->entry, &lookup_list);
+		}
+
+		if (free_cur) {
+			if (!BAD_PTR(entry)) {
+				kfree(entry);
+			}
+			entry = NULL;
 		}
 	}
 
-	list_for_each_entry_safe(entry, tmp, &del_list, entry) {
-		rb_erase(&entry->node->node, &tree->root);
+	list_for_each_entry_safe(e, tmp, &del_list, entry) {
+		rb_erase(&e->node->node, &tree->root);
+		kfree(e->node);
 	}
 
 	err = ubi_kval_insert_no_ovlap(tree, d, u);
 
 	exit:
-	list_for_each_entry_safe(entry, tmp, &lookup_list, entry) {
-		list_del(&entry->entry);
-		kfree(entry);
+	list_for_each_entry_safe(e, tmp, &lookup_list, entry) {
+		if (!BAD_PTR(e)) {
+			kfree(e);
+		}
 	}
-	list_for_each_entry_safe(entry, tmp, &del_list, entry) {
-		list_del(&entry->entry);
-		kfree(entry);
+	list_for_each_entry_safe(e, tmp, &del_list, entry) {
+		if (!BAD_PTR(e)) {
+			kfree(e);
+		}
 	}
 	return err;
 }
@@ -240,12 +258,12 @@ int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 	LIST_HEAD(del_list);
 	LIST_HEAD(lu_list);
 
-	if (BAD_PTR(tree) && d > u) {
+	if (BAD_PTR(tree) || d > u) {
 		return -EINVAL;
 	}
 
 	down_write(&tree->sem);
-	if (NULL == tree->root.rb_node) {
+	if (BAD_PTR(tree->root.rb_node)) {
 		goto exit;
 	}
 	n = tree->root.rb_node;
@@ -258,33 +276,37 @@ int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 	list_add(&e->entry, &lu_list);
 
 	while (!list_empty(&lu_list)) {
-		e = container_of(
-				lu_list.next,
+		e = list_first_entry(
+				&lu_list,
 				struct ubi_kval_lookup_entry,
 				entry);
 		node = e->node;
 		list_del(&e->entry);
 		kfree(e);
 
-		if (d <= node->d) {
-			tmp = ubi_kval_alloc_lu_entry(
-					rb_entry(node->node.rb_left,
-					struct ubi_kval_node, node));
-			if (BAD_PTR(tmp)) {
-				err = PTR_ERR(tmp);
-				goto exit;
+		if (d < node->d) {
+			if (!BAD_PTR(node->node.rb_left)) {
+				tmp = ubi_kval_alloc_lu_entry(
+						rb_entry(node->node.rb_left,
+						struct ubi_kval_node, node));
+				if (BAD_PTR(tmp)) {
+					err = PTR_ERR(tmp);
+					goto exit;
+				}
+				list_add(&tmp->entry, &lu_list);
 			}
-			list_add(&tmp->entry, &lu_list);
 		}
-		if (u >= node->u) {
-			tmp = ubi_kval_alloc_lu_entry(
-					rb_entry(node->node.rb_right,
-					struct ubi_kval_node, node));
-			if (BAD_PTR(tmp)) {
-				err = PTR_ERR(tmp);
-				goto exit;
+		if (u > node->u) {
+			if (!BAD_PTR(node->node.rb_right)) {
+				tmp = ubi_kval_alloc_lu_entry(
+						rb_entry(node->node.rb_right,
+						struct ubi_kval_node, node));
+				if (BAD_PTR(tmp)) {
+					err = PTR_ERR(tmp);
+					goto exit;
+				}
+				list_add(&tmp->entry, &lu_list);
 			}
-			list_add(&tmp->entry, &lu_list);
 		}
 
 		if ((d <= node->u) && (u >= node->d)) {
@@ -292,20 +314,22 @@ int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 			if ((u >= node->u) && (d <= node->d)) {
 				/* We must delete the current node */
 				rb_erase(&node->node, &tree->root);
+				kfree(node);
 			} else if ((u < node->u) && (d > node->d)) {
 				/* We must delete the current node and add
 				 * [node->d, d] and [node->u, u] nodes
 				 */
 				u32 d2 = node->d, u2 = node->u;
 				rb_erase(&node->node, &tree->root);
-				err = ubi_kval_insert_unlocked(tree, d2, d);
+				kfree(node);
+				err = ubi_kval_insert_unlocked(tree, d2, d - 1);
 				if (err) {
 					printk("Error inserting \"leftover\""
 							"node while removing [%u, %u] : %d",
 							d, u, err);
 					goto exit;
 				}
-				err = ubi_kval_insert_unlocked(tree, u, u2);
+				err = ubi_kval_insert_unlocked(tree, u + 1, u2);
 				if (err) {
 					printk("Error inserting \"leftover\""
 							"node while removing [%u, %u] : %d",
@@ -313,11 +337,11 @@ int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 					goto exit;
 				}
 			} else if ((d <= node->d) && (u >= node->d)) {
-				tmp_i = u;
+				tmp_i = u + 1;
 				u = node->d;
 				node->d = tmp_i;
 			} else if ((d <= node->u) && (u >= node->u)) {
-				tmp_i = d;
+				tmp_i = d - 1;
 				d = node->u;
 				node->u = tmp_i;
 			}
@@ -327,11 +351,9 @@ int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u)
 	exit:
 	up_write(&tree->sem);
 	list_for_each_entry_safe(e, tmp, &del_list, entry) {
-		list_del(&e->entry);
 		kfree(e);
 	}
 	list_for_each_entry_safe(e, tmp, &lu_list, entry) {
-		list_del(&e->entry);
 		kfree(e);
 	}
 	return err;
