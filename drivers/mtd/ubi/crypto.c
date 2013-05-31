@@ -653,8 +653,8 @@ int ubi_crypto_compute_hmac_hdr(struct ubi_device *ubi,
 		err = PTR_ERR(hmac);
 		goto exit;
 	}
-	kfree(hmac);
 	memcpy(hmac_hdr->htag, hmac, sizeof(hmac_hdr->htag));
+	kfree(hmac);
 	hmac_hdr->data_len = cpu_to_be32(len);
 	dest = hmac_hdr->top_hmac;
 	tag_len = sizeof(hmac_hdr->top_hmac);
