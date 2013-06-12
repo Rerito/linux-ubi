@@ -1172,31 +1172,20 @@ static int validate_hmac_hdr(const struct ubi_device *ubi,
 			 const struct ubi_hmac_hdr *hmac_hdr)
 {
 	u32 data_len = be32_to_cpu(hmac_hdr->data_len);
-	if (!data_len) {
-		/*
-		 * The top_hmac and btm_hmac must be zeroed.
-		 */
-		if (!ubi_check_pattern(hmac_hdr->top_hmac, 0,
-				sizeof(hmac_hdr->top_hmac)))
-			return 1;
+	u8 l = !!data_len, half_leb = (l > ubi->hmac_leb_size/2);
+	u8 tag = !ubi_check_pattern(hmac_hdr->htag, 0,
+				sizeof(hmac_hdr->htag)),
+	top = !ubi_check_pattern(hmac_hdr->top_hmac, 0,
+			sizeof(hmac_hdr->top_hmac)),
+	btm = !ubi_check_pattern(hmac_hdr->btm_hmac, 0,
+			sizeof(hmac_hdr->btm_hmac));
 
-		if (!ubi_check_pattern(hmac_hdr->btm_hmac, 0,
-				sizeof(hmac_hdr->top_hmac)))
-			return 1;
-
-	} else {
-		/* Check if the top_hmac is computed */
-		if (ubi_check_pattern(hmac_hdr->top_hmac, 0,
-				sizeof(hmac_hdr->top_hmac)))
-			return 1;
-
-		if (data_len > (ubi->hmac_leb_size >> 1)) {
-			if (ubi_check_pattern(hmac_hdr->btm_hmac, 0,
-					sizeof(hmac_hdr->btm_hmac)))
-				return 1;
-		}
-	}
-	return 0;
+	/*
+	 * This formula was computed using Karnaugh map.
+	 */
+	return !l && (top | btm) |
+			!tag && (top | btm) |
+			l && tag && (!top | (half_leb && !btm));
 }
 
 int ubi_io_read_hmac_hdr(struct ubi_device *ubi, int pnum,

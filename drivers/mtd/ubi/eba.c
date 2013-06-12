@@ -50,9 +50,33 @@
 #include "crypto.h"
 #endif
 
-
 /* Number of physical eraseblocks reserved for atomic LEB change operation */
 #define EBA_RESERVED_PEBS 1
+
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+static int convert_io_error(int err);
+
+static int convert_io_error(int err)
+{
+	if (err <= 0)
+		return err;
+
+	switch (err) {
+	case UBI_IO_FF:
+	case UBI_IO_FF_BITFLIPS:
+		return -ENODATA;
+		break;
+	case UBI_IO_BAD_HDR:
+	case UBI_IO_BAD_HDR_EBADMSG:
+		return -EBADMSG;
+		break;
+	case UBI_IO_BITFLIPS:
+		return 0;
+		break;
+	}
+	return err;
+}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 
 /**
  * next_sqnum - get next sequence number.
@@ -469,6 +493,7 @@ retry:
 	}
 	err = ubi_io_read_vid_hdr(ubi, pnum, vid_hdr, 0);
 	if (err) {
+		err = convert_io_error(err);
 		goto out_free;
 	}
 
@@ -482,6 +507,7 @@ retry:
 		}
 		err = ubi_io_read_hmac_hdr(ubi, pnum, info.hmac_hdr, 0);
 		if (err) {
+			err = convert_io_error(err);
 			goto out_free;
 		}
 	} else {
@@ -489,21 +515,29 @@ retry:
 	}
 #endif
 	err = ubi_io_read_data(ubi, crypt, pnum, offset, len);
-	if (!(len & (ubi->min_io_size - 1))) {
-		data_size = ubi_calc_data_len(ubi, crypt, len);
+	if (UBI_IO_BITFLIPS == err) {
+		err = 0;
+		scrub = 1;
 	}
-	if (data_size < len) {
-		memset(buf+data_size, 0xFF, len - data_size);
-	}
-	info.pnum = pnum;
-	info.vid_hdr = vid_hdr;
-	info.dst = buf;
-	info.src = crypt;
-	info.len = data_size;
-	err_cipher = ubi_crypto_decipher(
-			&info);
-	if (0 > err_cipher) {
 
+	if (!err) {
+		if (!(len & (ubi->min_io_size - 1))) {
+			data_size = ubi_calc_data_len(ubi, crypt, len);
+		}
+		if (data_size < len) {
+			memset(buf+data_size, 0xFF, len - data_size);
+		}
+		info.pnum = pnum;
+		info.vid_hdr = vid_hdr;
+		info.dst = buf;
+		info.src = crypt;
+		info.len = data_size;
+		err_cipher = ubi_crypto_decipher(
+				&info);
+		if (0 > err_cipher) {
+			err = err_cipher;
+			goto out_free;
+		}
 	}
 	ubi_free_vid_hdr(ubi, vid_hdr);
 	vid_hdr = NULL;
@@ -798,24 +832,28 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 			err = -ENOMEM;
 		}
 		err = ubi_io_read_vid_hdr(ubi, pnum, vid_hdr, 0);
-		if (err) {
+		if (err && UBI_IO_BITFLIPS != err) {
 			ubi_free_vid_hdr(ubi, vid_hdr);
-			return err;
+			return convert_io_error(err);
+		} else {
+			err = 0;
 		}
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 		if (ubi->hmac) {
 			hmac_hdr = ubi_zalloc_hmac_hdr(ubi, GFP_NOFS);
-			if (hmac_hdr) {
+			if (BAD_PTR(hmac_hdr)) {
 				ubi_free_vid_hdr(ubi, vid_hdr);
 				leb_write_unlock(ubi, vol_id, lnum);
 				return -ENOMEM;
 			}
 			err = ubi_io_read_hmac_hdr(ubi, pnum, hmac_hdr, 0);
-			if (err) {
+			if (err && err != UBI_IO_BITFLIPS) {
 				ubi_free_vid_hdr(ubi, vid_hdr);
 				ubi_free_hmac_hdr(ubi, hmac_hdr);
 				leb_write_unlock(ubi, vol_id, lnum);
-				return err;
+				return convert_io_error(err);
+			} else {
+				err = 0;
 			}
 			info.hmac_hdr = hmac_hdr;
 		}
