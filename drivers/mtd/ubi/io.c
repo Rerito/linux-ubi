@@ -1140,6 +1140,12 @@ int ubi_io_write_vid_hdr(struct ubi_device *ubi, int pnum,
 
 	vid_hdr->magic = cpu_to_be32(UBI_VID_HDR_MAGIC);
 	vid_hdr->version = UBI_VERSION;
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	if (ubi->hmac) {
+		vid_hdr->hmac_hdr_offset =
+				ubi->hmac_hdr_offset;
+	}
+#endif // CONFIG_UBI_CRYPTO_HMAC
 	crc = crc32(UBI_CRC32_INIT, vid_hdr, UBI_VID_HDR_SIZE_CRC);
 	vid_hdr->hdr_crc = cpu_to_be32(crc);
 
@@ -1170,6 +1176,13 @@ static int validate_hmac_hdr(const struct ubi_device *ubi,
 		/*
 		 * The top_hmac and btm_hmac must be zeroed.
 		 */
+		if (!ubi_check_pattern(hmac_hdr->top_hmac, 0,
+				sizeof(hmac_hdr->top_hmac)))
+			return 1;
+
+		if (!ubi_check_pattern(hmac_hdr->btm_hmac, 0,
+				sizeof(hmac_hdr->top_hmac)))
+			return 1;
 
 	} else {
 		/* Check if the top_hmac is computed */
@@ -1275,8 +1288,8 @@ int ubi_io_write_hmac_hdr(struct ubi_device *ubi, int pnum,
 	}
 	memset(hmac_hdr->padding1, 0,
 			sizeof(hmac_hdr->padding1));
-	crc = crc32(UBI_CRC32_INIT, &hmac_hdr,
-			sizeof(hmac_hdr) - 4);
+	crc = crc32(UBI_CRC32_INIT, hmac_hdr,
+			UBI_HMAC_HDR_SIZE_CRC);
 	hmac_hdr->crc = cpu_to_be32(crc);
 
 	err = self_check_hmac_hdr(ubi, pnum, hmac_hdr);

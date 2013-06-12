@@ -454,13 +454,15 @@ int ubi_crypto_cipher(struct ubi_crypto_cipher_info *info)
 	key = &k->cur;
 #else
 	while (BAD_PTR(k)) {
+#ifdef CONFIG_UBI_CRYPTO_HMAC
 		struct ubi_kmgr_set_vol_key_req req = {
 				.vol_id = info->vid_hdr->vol_id,
 				.vol = vol,
-				.tagged = info->vid_hdr->hmac_hdr_offset,
+				.tagged = info->ubi->hmac,
 				.key = {.k = NULL, .len = 0},
 				.main = 1
 		};
+#endif // CONFIG_UBI_CRYPTO_HMAC
 		k = ubi_kmgr_get_kentry(tree, info->vid_hdr->vol_id);
 
 		/*

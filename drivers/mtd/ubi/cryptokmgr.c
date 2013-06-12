@@ -395,43 +395,6 @@ inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k)
 }
 
 /**
- * ubi_kmgr_get_nextkey - Get the next key in a key ring
- * @kentry: the key ring
- * @key: the key the caller is holding
- *
- * The caller must have a reference to the @key it provides.
- * If the next key is well defined, the caller acquires a reference to it
- * and loses its reference to @key.
- * @kentry must also be well defined (obtained by a call to
- * @ubi_kmgr_get_kentry)
- */
-struct ubi_key *ubi_kmgr_get_nextkey(struct ubi_key_entry *kentry,
-		struct ubi_key *key)
-{
-	struct ubi_key *k = key;
-	if (BAD_PTR(key) || BAD_PTR(kentry)) {
-		return ERR_PTR(-EINVAL);
-	}
-
-	down_read(&kentry->kr_sem);
-	if (!list_empty(&kentry->key_ring)) {
-		while (container_of(&kentry->key_ring, struct ubi_key, entry) ==
-				(k = container_of(k->entry.next, struct ubi_key, entry))) {
-		}
-		if (k != key) {
-			ubi_kmgr_get_key(k);
-		} else {
-			k = ERR_PTR(-ENODATA);
-		}
-	}
-	if (!BAD_PTR(k)) {
-		ubi_kmgr_put_key(key);
-	}
-	up_read(&kentry->kr_sem);
-	return k;
-}
-
-/**
  * ubi_kmgr_key_lookup - Look up for a specific key
  * @kentry: the key ring
  * @lookup: the lookup function
@@ -634,7 +597,7 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	mutex_lock(&u->hmac.mutex);
 	comp_len = crypto_hash_digestsize((struct crypto_hash*)u->hmac.tfm);
 	comp_len = min(comp_len, sizeof(hmac_hdr->htag));
-
+	mutex_unlock(&u->hmac.mutex);
 	printk("%s - Comparison length for probing keys : %d\n", __func__, comp_len);
 
 	list_for_each_entry(key, &kentry->key_ring, entry) {
@@ -668,7 +631,7 @@ static struct ubi_key *ubi_kmgr_probe_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	if (err)
 		return ERR_PTR(err);
 
-	return ERR_PTR(-ENODATA);
+	return key;
 }
 
 #endif // CONFIG_UBI_CRYPTO_HMAC
@@ -701,7 +664,7 @@ struct ubi_key *ubi_kmgr_get_leb_key(struct ubi_hmac_hdr *hmac_hdr,
 	}
 	lnum = be32_to_cpu(vid_hdr->lnum);
 #ifdef CONFIG_UBI_CRYPTO_HMAC
-	if (!kentry->tagged) {
+	if (!kentry->tagged || NULL == hmac_hdr) {
 		return ubi_kmgr_get_mainkey(kentry);
 	}
 	down_read(&kentry->kr_sem);
@@ -843,6 +806,9 @@ int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 		if (IS_ERR(kentry)) {
 			return PTR_ERR(kentry);
 		}
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+		kentry->tagged = req->tagged;
+#endif
 		down_write(&tree->sem);
 		err = ubi_kmgr_insert_kentry(tree, kentry);
 		if (err) {
