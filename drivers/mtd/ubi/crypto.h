@@ -49,7 +49,7 @@ struct ubi_crypto_cipher_info {
 
 #define SAFE_FREE(ptr) do {\
 		if (!BAD_PTR(ptr)) {\
-			(IS_VMALLOC((ptr))) ? vfree((ptr)) :	kfree((ptr));\
+			(IS_VMALLOC((ptr))) ? vfree((ptr)) : kfree((ptr));\
 			(ptr) = NULL;\
 		}\
 	}while(0)

@@ -238,8 +238,93 @@ int ubi_kval_insert(struct ubi_kval_tree *tree, u32 d, u32 u)
 	return err;
 }
 
+/**
+ * ubi_kval_insert_tree - Insert intervals of a tree to another
+ * @dst: The destination tree
+ * @src: The source tree
+ *
+ * This function will simply insert all the intervals contained in
+ * the @src tree into the @dst tree.
+ * Warning : This function can hold the @src tree's semaphore for
+ * a while ... (in read mode)
+ */
+int ubi_kval_insert_tree(struct ubi_kval_tree *dst,
+		struct ubi_kval_tree *src)
+{
+	int err = 0;
+	struct ubi_kval_node *knode = NULL;
+	struct rb_node *n = NULL;
+	struct ubi_kval_lookup_entry *entry = NULL,
+			*tmp = NULL, *e = NULL;
+	LIST_HEAD(lookup_list);
+	if (BAD_PTR(dst)) {
+		return -EINVAL;
+	} else if (BAD_PTR(src)) {
+		return 0;
+	}
+	n = src->root.rb_node;
+	knode = rb_entry(n, struct ubi_kval_node, node);
+	entry = ubi_kval_alloc_lu_entry(knode);
+	if (BAD_PTR(entry)) {
+		return PTR_ERR(entry);
+	}
+	list_add(&entry->entry, &lookup_list);
+	down_read(&src->sem);
+	if (src->dying) {
+		err = -EACCES;
+		goto out_unlock;
+	}
+	down_write(&dst->sem);
+	if (dst->dying) {
+		err = -EACCES;
+		up_write(&dst->sem);
+		goto out_unlock;
+	}
 
-/*
+	while (!list_empty(&lookup_list)) {
+		entry = list_first_entry(&lookup_list,
+			struct ubi_kval_lookup_entry, entry);
+		list_del(&entry->entry);
+		knode = entry->node;
+		n = &knode->node;
+		if (!BAD_PTR(n->rb_left)) {
+			tmp = ubi_kval_alloc_lu_entry(
+				rb_entry(n->rb_left, struct ubi_kval_node, node));
+			if (BAD_PTR(tmp)) {
+				kfree(entry);
+				err = PTR_ERR(tmp);
+				break;
+			}
+			list_add(&tmp->entry, &lookup_list);
+		}
+		if (!BAD_PTR(n->rb_right)) {
+			tmp = ubi_kval_alloc_lu_entry(
+				rb_entry(n->rb_right, struct ubi_kval_node, node));
+			if (BAD_PTR(tmp)) {
+				kfree(entry);
+				err = PTR_ERR(tmp);
+				break;
+			}
+			list_add(&tmp->entry, &lookup_list);
+		}
+		err = ubi_kval_insert_unlocked(dst, knode->d, knode->u);
+		kfree(entry);
+		if (err) {
+			break;
+		}
+	}
+	up_write(&src->sem);
+	out_unlock:
+	up_read(&src->sem);
+	list_for_each_entry_safe(e, tmp, &lookup_list, entry) {
+		if (!BAD_PTR(e)) {
+			kfree(e);
+		}
+	}
+	return err;
+}
+
+/**
  * ubi_kval_remove - Remove an interval from the tree
  * @tree: The interval tree
  * @d: lower bound of the interval to remove
@@ -415,6 +500,28 @@ struct ubi_kval_node *ubi_kval_get_rightmost(struct ubi_kval_tree *tree)
 	while (NULL != n) {
 		rmost = rb_entry(n, struct ubi_kval_node, node);
 		n = n->rb_right;
+	}
+	exit:
+	up_read(&tree->sem);
+	return rmost;
+}
+
+struct ubi_kval_node *ubi_kval_get_leftmost(struct ubi_kval_tree *tree)
+{
+	struct rb_node *n = ERR_PTR(-ENODATA);
+	struct ubi_kval_node *rmost = NULL;
+	if (BAD_PTR(tree)) {
+		return ERR_PTR(-EINVAL);
+	}
+	down_read(&tree->sem);
+	if (tree->dying) {
+		rmost = ERR_PTR(-EACCES);
+		goto exit;
+	}
+	n = tree->root.rb_node;
+	while (NULL != n) {
+		rmost = rb_entry(n, struct ubi_kval_node, node);
+		n = n->rb_left;
 	}
 	exit:
 	up_read(&tree->sem);

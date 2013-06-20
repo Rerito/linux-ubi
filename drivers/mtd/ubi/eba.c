@@ -652,7 +652,12 @@ retry:
 		}
 		err = ubi_io_read_hmac_hdr(ubi, pnum, hmac_hdr, 1);
 		if (err) {
-			goto out_put;
+			if (UBI_IO_BITFLIPS != err) {
+				err = 0;
+			} else {
+				err = convert_io_error(err);
+				goto out_put;
+			}
 		}
 	}
 #endif // CONFIG_UBI_CRYPTO_HMAC
@@ -1331,20 +1336,46 @@ int ubi_eba_update_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 		int lnum)
 {
 	int err = 0;
-	int pnum;
+	int pnum, new_pnum;
+	size_t data_len = 0;
+	u8 *buf = NULL;
+	u32 data_crc = 0;
 	struct ubi_vid_hdr *vid_hdr = NULL;
 	struct ubi_hmac_hdr *hmac_hdr = NULL;
-	struct ubi_key *cur_key = NULL;
-
+	struct ubi_key_tree *ktree = NULL;
+	struct ubi_key_entry *kentry = NULL;
+	struct ubi_key *key = NULL, *main_key = NULL;
+	struct ubi_crypto_cipher_info info;
 	if (BAD_PTR(ubi) || BAD_PTR(vol))
 		return -EINVAL;
 
 	if (ubi->ro_mode)
 		return -EROFS;
+	/*
+	 * Since there is no HMAC header,
+	 * There is a "lack of data", hence the
+	 * %ENODATA error code.
+	 */
+	if (!ubi->hmac)
+		return -ENODATA;
 
 	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
 	if (!vid_hdr)
 		return -ENOMEM;
+
+	hmac_hdr = ubi_zalloc_hmac_hdr(ubi, GFP_NOFS);
+	if (!hmac_hdr) {
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		return -ENOMEM;
+	}
+
+	ktree = ubi_kmgr_get_tree(ubi->ubi_num);
+	kentry = ubi_kmgr_get_kentry(ktree,
+			cpu_to_be32(vol->vol_id));
+	ubi_kmgr_put_tree(ktree);
+	if (BAD_PTR(kentry)) {
+		goto out_free;
+	}
 
 	err = leb_write_lock(ubi, vol->vol_id, lnum);
 	if (err) {
@@ -1355,24 +1386,134 @@ int ubi_eba_update_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 	}
 	err = ubi_io_read_vid_hdr(ubi, pnum, vid_hdr, 1);
 	if (err) {
+		if (UBI_IO_BITFLIPS == err) {
+			err = 0;
+		} else {
+			err = convert_io_error(err);
+			goto out_unlock;
+		}
+	}
 
+	err = ubi_io_read_hmac_hdr(ubi, pnum, hmac_hdr, 1);
+	if (err) {
+		err = convert_io_error(err);
+		switch (err) {
+		case 0:
+			break;
+		case -ENODATA:
+			err = 0;
+		default:
+			goto out_unlock;
+			break;
+		}
+	}
+
+	key = ubi_kmgr_get_leb_key(hmac_hdr,
+			vid_hdr, pnum, kentry, 1);
+	if (kentry->main == key) {
+		goto out_unlock;
+	} else if (IS_ERR(key)) {
+		err = PTR_ERR(key);
+		goto out_unlock;
+	}
+
+	main_key = ubi_kmgr_get_mainkey(kentry);
+	if (IS_ERR(main_key)) {
+		err = PTR_ERR(main_key);
+		goto out_unlock;
+	}
+	buf = vmalloc(ubi->hmac_leb_size);
+	if (!buf) {
+		goto out_unlock;
+	}
+
+	err = ubi_io_read_data(ubi, buf, pnum,
+			0, ubi->hmac_leb_size);
+	if (err && UBI_IO_BITFLIPS != err) {
+		goto out_unlock;
+	}
+	mutex_lock(&ubi->buf_mutex);
+
+	/*
+	 * Getting the LEB's plaintext
+	 */
+	info.pnum = pnum;
+	info.len = ubi->hmac_leb_size;
+	info.ubi = ubi;
+	info.vid_hdr = vid_hdr;
+	info.hmac_hdr = hmac_hdr;
+	info.src = buf;
+	info.dst = ubi->peb_buf;
+	err = ubi_crypto_decipher(&info);
+	if (err) {
+		goto out_unlock_buf;
 	}
 
 	/*
-	 *  3. Read HMAC hdr
-	 *  4. Find the key in use
-	 *  5. Lock LEB buffer
-	 *  6. Read LEB data
-	 *  7. Cipher them to the dest key
-	 *  8. Write headers
-	 *  9. Write buffer
-	 * 10. Unlock
+	 * Getting a free PEB
+	 * And updating the vid_hdr
 	 */
+	new_pnum = ubi_wl_get_peb(ubi);
+	vid_hdr->sqnum = cpu_to_be64(
+			ubi_next_sqnum(ubi));
+	if (0 > new_pnum) {
+		err = new_pnum;
+		goto out_unlock_buf;
+	}
+	data_len = ubi_calc_data_len(
+		ubi, ubi->peb_buf, ubi->hmac_leb_size);
+	info.src = ubi->peb_buf;
+	info.dst = buf;
+	info.hmac_hdr = NULL;
+	info.pnum = new_pnum;
+	info.len = data_len;
+	err = ubi_crypto_cipher(&info);
+	if (err) {
+		goto out_unlock_buf;
+	}
+	data_crc = crc32(UBI_CRC32_INIT, buf, data_len);
+	vid_hdr->data_crc =cpu_to_be32(data_crc);
+	vid_hdr->hdr_crc = cpu_to_be32(
+		crc32(UBI_CRC32_INIT, vid_hdr, UBI_VID_HDR_SIZE_CRC));
 
+	err = ubi_crypto_compute_hmac_hdr(ubi,
+			hmac_hdr, vid_hdr, new_pnum,
+			buf, data_len);
 
+	err = ubi_io_write_vid_hdr(ubi, pnum, vid_hdr);
+	if (err && UBI_IO_BITFLIPS != err) {
+		err = convert_io_error(err);
+		goto out_unlock_buf;
+	}
+	err = ubi_io_write_hmac_hdr(ubi, pnum, hmac_hdr);
+	if (err && UBI_IO_BITFLIPS != err) {
+		err = convert_io_error(err);
+		goto out_unlock_buf;
+	}
+	err = ubi_io_write_data(ubi, buf, pnum, 0, data_len);
+	if (err && UBI_IO_BITFLIPS != err) {
+		err = convert_io_error(err);
+		goto out_unlock_buf;
+	}
+	vol->eba_tbl[lnum] = new_pnum;
+	out_unlock_buf:
+	mutex_unlock(&ubi->buf_mutex);
 	out_unlock:
 	leb_write_unlock(ubi, vol->vol_id, lnum);
 	out_free:
+	if (!BAD_PTR(buf)) {
+		vfree(buf);
+	}
+	if (!BAD_PTR(main_key)) {
+		ubi_kmgr_put_key(main_key);
+	}
+	if (!BAD_PTR(key)) {
+		ubi_kmgr_put_key(key);
+	}
+	if (!BAD_PTR(kentry)) {
+		ubi_kmgr_put_kentry(kentry);
+	}
+	ubi_free_hmac_hdr(ubi, hmac_hdr);
 	ubi_free_vid_hdr(ubi, vid_hdr);
 	return err;
 }

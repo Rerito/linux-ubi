@@ -7,21 +7,29 @@
 /**
  * ubi_upd_work - self-contained structure for update work
  * @upd_tree: The LEBs that must be updated
- * @reset: The main key has been reset, the update must start
- *         again from the beginning.
+ * @err_tree: A tree to keep track of the LEBs where
+ *            the update work failed.
+ * @d: lesser bound of the current interval
  */
 struct ubi_upd_work {
 	struct ubi_kval_tree upd_tree;
+	struct ubi_kval_tree err_tree;
 	u32 d, u, s;
 };
 
 static u32 ubi_kupd_get_next_leb(struct ubi_upd_work *upd_w)
 {
 	u32 next = 0;
+	int err = 0;
 	struct ubi_kval_node *n;
 	if (upd_w->d > upd_w->u) {
+		err = ubi_kval_remove(
+			&upd_w->upd_tree, upd_w->s, upd_w->u);
+		if (err) {
+			return err;
+		}
 		down_read(&upd_w->upd_tree.sem);
-		n = ubi_kval_get_rightmost(&upd_w->upd_tree);
+		n = ubi_kval_get_leftmost(&upd_w->upd_tree);
 		if (!BAD_PTR(n)) {
 			upd_w->s = n->d;
 			upd_w->d = n->d;
@@ -37,32 +45,39 @@ static u32 ubi_kupd_get_next_leb(struct ubi_upd_work *upd_w)
 	return next;
 }
 
-void ubi_kmgr_upd(void *p_kentry)
+int ubi_kmgr_upd(void *p_kentry)
 {
 	struct ubi_key_entry *kentry = p_kentry;
 	struct ubi_key *main = NULL;
 	struct ubi_upd_work upd_data;
-	struct ubi_vid_hdr vid_hdr;
-	struct ubi_hmac_hdr hmac_hdr;
 	struct ubi_volume *vol;
 	struct ubi_device *ubi;
-	u32 leb = 0, max = 0;
+	u32 leb = 0;
 	u32 reserved_ebs;
 	int err = 0;
 	if (BAD_PTR(kentry)) {
-		return;
+		return PTR_ERR(kentry);
 	}
 
 	ubi_kval_init_tree(&upd_data.upd_tree);
-
+	ubi_kval_init_tree(&upd_data.err_tree);
 	while (1) {
+		err = 0;
+		if (kthread_should_stop()) {
+			break;
+		}
 		main = ubi_kmgr_get_mainkey(kentry);
 		if (BAD_PTR(main)) {
 			set_current_state(TASK_INTERRUPTIBLE);
 			schedule();
 		} else {
 			mutex_lock(&kentry->mutex);
-			reserved_ebs = kentry->reserved_ebs;
+			vol = kentry->vol;
+			if (BAD_PTR(vol)) {
+				ubi_err("%s - Bad UBI volume descriptor", __func__);
+				break;
+			}
+			reserved_ebs = vol->reserved_pebs;
 			if (kentry->dying) {
 				mutex_unlock(&kentry->mutex);
 				ubi_kmgr_put_key(main);
@@ -74,6 +89,8 @@ void ubi_kmgr_upd(void *p_kentry)
 				 */
 				ubi_kval_clear_tree(&upd_data.upd_tree);
 				upd_data.upd_tree.dying = 0;
+				ubi_kval_clear_tree(&upd_data.err_tree);
+				upd_data.err_tree.dying = 0;
 				err = ubi_kval_insert(&upd_data.upd_tree,
 						0, reserved_ebs);
 				if (0 > err) {
@@ -88,7 +105,7 @@ void ubi_kmgr_upd(void *p_kentry)
 					 * This should never fail, so if we have an
 					 * error, that would be memory corruption.
 					 */
-					printk(KERN_ALERT "Error on ubi_kval_insert()"
+					ubi_err(KERN_ALERT "Error on ubi_kval_insert()"
 							"(err = %d)\n"
 							"Possible memory corruption,"
 							"aborting update\n", err);
@@ -99,12 +116,19 @@ void ubi_kmgr_upd(void *p_kentry)
 					kentry->reset_upd = 0;
 				}
 			}
-			leb = ubi_kupd_get_next_leb(&upd_data);
 			mutex_unlock(&kentry->mutex);
+			leb = ubi_kupd_get_next_leb(&upd_data);
 			if ((u32)(-1) == leb) {
 				/* No more update to perform.
 				 * Clean up the key ring to erase
 				 * obsolete entries. */
+				ubi_kval_insert_tree(&upd_data.upd_tree, &upd_data.err_tree);
+				ubi_kmgr_put_key(main);
+				continue;
+			} else if (IS_ERR(leb)) {
+				/*
+				 * An error occured ...
+				 */
 				ubi_kmgr_put_key(main);
 				continue;
 			}
@@ -116,13 +140,9 @@ void ubi_kmgr_upd(void *p_kentry)
 			 *    use the main key instead of the previous one.
 			 * 4. If an error has occured ...
 			 */
-			vol = kentry->vol;
-			if (BAD_PTR(vol)) {
-				/* We should stop the update worker */
-			} else {
-				ubi = vol->ubi;
-				err = ubi_eba_update_leb(ubi, vol, leb);
-			}
+			ubi = vol->ubi;
+			err = ubi_eba_update_leb(ubi, vol, leb);
+
 			/*
 			 * FIXME
 			 * The clean up is a little tricky if it is a copy failure
@@ -131,18 +151,21 @@ void ubi_kmgr_upd(void *p_kentry)
 			 * step 3.
 			 */
 			if (err) {
-				if (upd_data.s < leb) {
-					ubi_kval_remove(&upd_data.upd_tree,
-							upd_data.s, leb - 1);
-					upd_data.s = leb + 1;
-				} else {
-					upd_data.s++;
+				switch (err) {
+				case -ENODATA:
+					err = 0;
+					break;
+				default:
+					ubi_kval_insert(&upd_data.err_tree, leb, leb);
+					break;
 				}
 			}
 		}
 		ubi_kmgr_put_key(main);
-	} // while (1)
+	} // end while (1)
 	ubi_kmgr_put_kentry(kentry);
 	ubi_kval_clear_tree(&upd_data.upd_tree);
+	ubi_kval_clear_tree(&upd_data.err_tree);
+	return err;
 }
 

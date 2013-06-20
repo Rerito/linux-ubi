@@ -7,10 +7,13 @@
 #include <linux/rwsem.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
+#include <linux/kthread.h>
 #include "ubi.h"
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
 #include "cryptokval.h"
+#define UBI_KMGR_UPD_KTHREAD_NAME "ubi_kmgr_upd_thread"
+
 struct ubi_volume;
 #endif
 
@@ -36,11 +39,13 @@ struct ubi_key_tree {
  * struct ubi_key
  * @key: the key value
  * @key_len: the length of the key (in bytes)
+ * @refcount: A reference counter for the key object
  * @entry: embedded list structure (for key ring)
  * @val_tree: validity tree
  * @obsolete: is this key obsolete ?
+ * @mutex: A mutex to protect access to the key resources
  *
- * The 3 last fields are only present if %UBI_CRYPTO_HMAC
+ * The last fields are only present if %UBI_CRYPTO_HMAC
  * is enabled. Multiple keys can coexist on the same volume
  * due to unclean reboots. With HMAC support turned on,
  * it is possible for UBI to check the validity of a given
@@ -96,6 +101,7 @@ struct ubi_key_value {
  * @main: main key for the volume
  * @kr_sem: r/w semaphore to protect access to @key_ring
  * @unknown: the interval tree of unresolved LEB's
+ * @reserved_ebs: the number of erase blocks for the volume
  * @upd_worker: the worker that performs main key updates
  * @cur: key in use for the volume
  */
@@ -113,7 +119,7 @@ struct ubi_key_entry {
 	struct rw_semaphore kr_sem;
 	struct ubi_kval_tree unknown;
 	__u32 reserved_ebs;
-	struct work_struct upd_worker;
+	struct task_struct *upd_worker;
 	__u8 reset_upd;
 #else
 	struct ubi_key cur;
@@ -131,6 +137,14 @@ struct ubi_kmgr_set_vol_key_req {
 extern struct ubi_key_tree ubi_kmgr_ktree[UBI_MAX_DEVICES];
 
 #ifdef CONFIG_UBI_CRYPTO_HMAC
+/*
+ * From cryptokupd.c
+ */
+int ubi_kmgr_upd(void *p_kentry);
+
+/*
+ * From cryptokmgr.c
+ */
 inline struct ubi_key *ubi_kmgr_get_key(struct ubi_key *k);
 inline struct ubi_key *ubi_kmgr_put_key(struct ubi_key *k);
 

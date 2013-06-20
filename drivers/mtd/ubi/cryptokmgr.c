@@ -126,6 +126,7 @@ static struct ubi_key_entry *ubi_kmgr_alloc_kentry(__be32 vid,
 	struct ubi_key_entry *kentry = NULL;
 	struct ubi_key *key = NULL;
 	int err = 0;
+
 	if (NULL == (kentry = kzalloc(sizeof(*kentry), GFP_KERNEL))) {
 		err = -ENOMEM;
 		goto exit;
@@ -145,6 +146,13 @@ static struct ubi_key_entry *ubi_kmgr_alloc_kentry(__be32 vid,
 		kentry->main = key;
 	}
 	// FIXME : Prepare the update worker
+	kentry->upd_worker = kthread_create(ubi_kmgr_upd,
+			kentry, UBI_KMGR_UPD_KTHREAD_NAME "_%.6x", vid);
+	if (BAD_PTR(kentry->upd_worker)) {
+		err = PTR_ERR(kentry->upd_worker);
+		goto exit;
+	}
+	wake_up_process(kentry->upd_worker);
 #else
 	key = &kentry->cur;
 #endif // CONFIG_UBI_CRYPTO_HMAC
@@ -160,7 +168,6 @@ static struct ubi_key_entry *ubi_kmgr_alloc_kentry(__be32 vid,
 		key->key_len = 0;
 	}
 	mutex_init(&kentry->mutex);
-
 	exit:
 	if (err) {
 		if (kentry) {
@@ -171,10 +178,18 @@ static struct ubi_key_entry *ubi_kmgr_alloc_kentry(__be32 vid,
 				kfree(key);
 #endif
 			}
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+			kthread_stop(kentry->upd_worker);
+#endif
 			kfree(kentry);
 		}
 		kentry = ERR_PTR(err);
 	}
+#ifdef CONFIG_UBI_CRYPTO_HMAC
+	else {
+		wake_up_process(kentry->upd_worker);
+	}
+#endif
 	return kentry;
 }
 
@@ -536,6 +551,7 @@ static int ubi_kmgr_free_kentry(struct ubi_key_entry *kentry)
 	down_write(&kentry->kr_sem);
 	ubi_kmgr_free_keyring(&kentry->key_ring);
 	up_write(&kentry->kr_sem);
+	kthread_stop(kentry->upd_worker);
 #else
 	if (kentry->cur.key) {
 		kfree(kentry->cur.key);
@@ -856,10 +872,9 @@ int ubi_kmgr_setvolkey(struct ubi_key_tree *tree,
 				 * Update main status for the key
 				 * trigger/reset update worker
 				 */
-			} else if (!main && (key == kentry->main)) {
-				/*
-				 * TODO : trigger/reset update worker
-				 */
+				kentry->main = key;
+				kentry->reset_upd = 1;
+				wake_up_process(kentry->upd_worker);
 			}
 			/* Else, nothing to do */
 		} else {

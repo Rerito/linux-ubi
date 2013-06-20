@@ -26,9 +26,12 @@ int ubi_kval_init_tree(struct ubi_kval_tree *tree);
 void ubi_kval_clear_tree(struct ubi_kval_tree *tree);
 
 int ubi_kval_insert(struct ubi_kval_tree *tree, u32 d, u32 u);
+int ubi_kval_insert_tree(struct ubi_kval_tree *dst,
+		struct ubi_kval_tree *src);
 int ubi_kval_remove(struct ubi_kval_tree *tree, u32 d, u32 u);
 int ubi_kval_is_in_tree(struct ubi_kval_tree *tree, u32 x);
 struct ubi_kval_node *ubi_kval_get_rightmost(struct ubi_kval_tree *tree);
+struct ubi_kval_node *ubi_kval_get_leftmost(struct ubi_kval_tree *tree);
 int ubi_kval_insert(struct ubi_kval_tree *tree, u32 d, u32 u);
 int ubi_kval_dump_tree(struct ubi_kval_tree *tree);
 
